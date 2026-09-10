@@ -1,0 +1,33 @@
+INSTALL EXTENSION vsql_duckdb;
+
+# Reading the fixture needs the local filesystem.
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+
+--write_file $MYSQL_TMP_DIR/duckdb_cities.json
+[{"city":"oslo","n":10},{"city":"bergen","n":5}]
+EOF
+
+--echo #
+--echo # DuckDB's json reader returns both records
+--echo #
+
+--disable_query_log
+--let $cities = $MYSQL_TMP_DIR/duckdb_cities.json
+eval SET @all = CONCAT(
+  'SELECT city, n FROM read_json(''', '$cities', ''') ORDER BY city');
+--enable_query_log
+SELECT duckdb_query(@all) AS records;
+
+--echo #
+--echo # The reader types the columns, so DuckDB can aggregate them
+--echo #
+
+--disable_query_log
+eval SET @total = CONCAT(
+  'SELECT sum(n) FROM read_json(''', '$cities', ''')');
+--enable_query_log
+SELECT duckdb_scalar(@total) AS total;
+
+--remove_file $MYSQL_TMP_DIR/duckdb_cities.json
+
+UNINSTALL EXTENSION vsql_duckdb;

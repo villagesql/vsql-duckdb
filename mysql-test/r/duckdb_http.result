@@ -1,0 +1,20 @@
+INSTALL EXTENSION vsql_duckdb;
+#
+# Local file access is off, so nothing here can be read from disk
+#
+SELECT JSON_EXTRACT(duckdb_status(), '$.allow_local_files') AS local_files;
+local_files
+false
+#
+# Reading the file over HTTP returns both records
+#
+SELECT duckdb_query(@all) AS records;
+records
+[{"city":"bergen","n":5},{"city":"oslo","n":10}]
+#
+# DuckDB aggregates over the fetched file
+#
+SELECT duckdb_scalar(@total) AS total;
+total
+15
+UNINSTALL EXTENSION vsql_duckdb;

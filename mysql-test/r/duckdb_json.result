@@ -1,0 +1,15 @@
+INSTALL EXTENSION vsql_duckdb;
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+#
+# DuckDB's json reader returns both records
+#
+SELECT duckdb_query(@all) AS records;
+records
+[{"city":"bergen","n":5},{"city":"oslo","n":10}]
+#
+# The reader types the columns, so DuckDB can aggregate them
+#
+SELECT duckdb_scalar(@total) AS total;
+total
+15
+UNINSTALL EXTENSION vsql_duckdb;

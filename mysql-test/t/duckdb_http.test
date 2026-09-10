@@ -1,0 +1,111 @@
+INSTALL EXTENSION vsql_duckdb;
+
+--echo #
+--echo # Local file access is off, so nothing here can be read from disk
+--echo #
+SELECT JSON_EXTRACT(duckdb_status(), '$.allow_local_files') AS local_files;
+
+--write_file $MYSQLTEST_VARDIR/tmp/duckdb_cities.json
+[{"city":"oslo","n":10},{"city":"bergen","n":5}]
+EOF
+
+# The foreground launcher spawns a detached --serve child and waits until it has
+# bound a port and written http_port.inc, then exits 0. Because MTR blocks on
+# the foreground --exec, the server is listening before the next line runs — no
+# polling race, no "&". Server output goes to http_server.log rather than
+# /dev/null, so a startup failure is visible instead of silent.
+--write_file $MYSQLTEST_VARDIR/tmp/duckdb_http_server.py
+import sys, os, time, threading, subprocess, http.server, socketserver
+_dir = os.path.dirname(os.path.abspath(__file__))
+PORT_INC = os.path.join(_dir, 'http_port.inc')
+STOP_SH  = os.path.join(_dir, 'stop_http.sh')
+LOG      = os.path.join(_dir, 'http_server.log')
+
+def serve():
+    # Pre-bind marker, so a hang before the socket is up is not a silent log.
+    sys.stderr.write('http child: starting\n'); sys.stderr.flush()
+    # Backstop: self-exit so a leaked server cannot outlive the run when
+    # cleanup is skipped. The test finishes in under a second.
+    def _watchdog():
+        time.sleep(60)
+        os._exit(0)
+    threading.Thread(target=_watchdog, daemon=True).start()
+
+    class H(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=_dir, **kw)
+        def log_message(self, *a):
+            pass
+
+    # HTTPServer.server_bind() calls socket.getfqdn(), a reverse-DNS lookup
+    # that stalls on some macOS hosts and blocks the constructor before the
+    # port can be reported. Bind without it.
+    class Server(http.server.HTTPServer):
+        def server_bind(self):
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = 'localhost'
+            self.server_port = self.server_address[1]
+
+    srv = Server(('127.0.0.1', 0), H)
+    port = srv.server_address[1]
+    with open(STOP_SH, 'w') as f:
+        f.write('kill %d\n' % os.getpid())
+    # Written last: its existence is the readiness signal.
+    with open(PORT_INC, 'w') as f:
+        f.write('let $http_port = %d;\n' % port)
+    srv.serve_forever()
+
+if '--serve' in sys.argv:
+    serve()
+    sys.exit(0)
+
+try:
+    os.remove(PORT_INC)            # drop a stale signal from an aborted run
+except OSError:
+    pass
+logf = open(LOG, 'w')
+child = subprocess.Popen(
+    [sys.executable, '-B', os.path.abspath(__file__), '--serve'],
+    stdout=logf, stderr=logf, start_new_session=True)
+for _ in range(80):                # ready in under a second normally
+    if child.poll() is not None:
+        sys.stderr.write('http server exited early:\n' + open(LOG).read())
+        sys.exit(1)
+    if os.path.exists(PORT_INC):
+        sys.exit(0)
+    time.sleep(0.25)
+sys.stderr.write('http server not ready in time:\n' + open(LOG).read())
+sys.exit(1)
+EOF
+
+--exec python3 -B $MYSQLTEST_VARDIR/tmp/duckdb_http_server.py
+--source $MYSQLTEST_VARDIR/tmp/http_port.inc
+
+--echo #
+--echo # Reading the file over HTTP returns both records
+--echo #
+
+--disable_query_log
+eval SET @url = CONCAT('http://127.0.0.1:', $http_port, '/duckdb_cities.json');
+SET @all = CONCAT('SELECT city, n FROM read_json(''', @url, ''') ORDER BY city');
+--enable_query_log
+SELECT duckdb_query(@all) AS records;
+
+--echo #
+--echo # DuckDB aggregates over the fetched file
+--echo #
+
+--disable_query_log
+SET @total = CONCAT('SELECT sum(n) FROM read_json(''', @url, ''')');
+--enable_query_log
+SELECT duckdb_scalar(@total) AS total;
+
+# Kill the server by PID; stop_http.sh was written by the server child.
+--exec sh $MYSQLTEST_VARDIR/tmp/stop_http.sh 2>/dev/null || true
+--remove_file $MYSQLTEST_VARDIR/tmp/stop_http.sh
+--remove_file $MYSQLTEST_VARDIR/tmp/duckdb_http_server.py
+--remove_file $MYSQLTEST_VARDIR/tmp/http_port.inc
+--remove_file $MYSQLTEST_VARDIR/tmp/http_server.log
+--remove_file $MYSQLTEST_VARDIR/tmp/duckdb_cities.json
+
+UNINSTALL EXTENSION vsql_duckdb;
