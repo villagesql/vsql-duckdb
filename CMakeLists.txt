@@ -54,9 +54,12 @@ if(APPLE)
     target_link_options(vsql_duckdb PRIVATE
         "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/exported_symbols.txt")
 elseif(UNIX)
+    # --no-undefined turns an unresolved symbol into a link error. Nothing here
+    # binds against mysqld at load time, so a leftover is always a link bug.
     target_link_options(vsql_duckdb PRIVATE
         "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exported_symbols.map"
-        "-Wl,--exclude-libs,ALL")
+        "-Wl,--exclude-libs,ALL"
+        "-Wl,--no-undefined")
 endif()
 
 VEF_CREATE_VEB(

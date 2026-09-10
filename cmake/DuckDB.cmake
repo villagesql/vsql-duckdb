@@ -140,7 +140,16 @@ endif()
 add_library(duckdb_static INTERFACE)
 add_dependencies(duckdb_static duckdb_build)
 target_include_directories(duckdb_static SYSTEM INTERFACE "${_duckdb_prefix}/include")
-target_link_libraries(duckdb_static INTERFACE ${_duckdb_link_libs})
+
+# The loader archive calls into each reader archive and every reader calls back
+# into libduckdb_static.a, so no single order satisfies GNU ld's one pass.
+# Apple's linker resolves to closure and rejects --start-group.
+if(APPLE)
+  target_link_libraries(duckdb_static INTERFACE ${_duckdb_link_libs})
+else()
+  target_link_libraries(duckdb_static INTERFACE
+      -Wl,--start-group ${_duckdb_link_libs} -Wl,--end-group)
+endif()
 
 # httpfs reaches the network through libcurl and OpenSSL. mysqld already links
 # both on every platform we build for.
