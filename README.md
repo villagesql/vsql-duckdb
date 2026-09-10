@@ -419,7 +419,7 @@ The other four readers do not produce a working build today:
 |---|---|
 | `delta` | Links only if `libdelta_kernel_ffi.a` (108 MB) and the platform frameworks its Rust half needs are added by hand |
 | `vortex` | The same, with `libvortex_duckdb.a` (128 MB). Its `libvortex_extension.a` is a shim holding no reader code |
-| `iceberg` | Does not configure without vcpkg, for `avro-c`, `roaring` and `aws-sdk-cpp` |
+| `iceberg` | Does not configure without vcpkg, for `avro-c`, `roaring` and `aws-sdk-cpp`. The AWS dependency is not optional — see below |
 | `mysql_scanner` | Does not configure without vcpkg, for `libmariadb` |
 
 A Rust reader is two archives, and DuckDB installs only the C++ half into its
@@ -429,6 +429,22 @@ the engine then starts with no readers at all and reports that it cannot load
 `parquet`. DuckDB loads its linked readers in one loop with no error handling,
 so one reader throwing during load leaves the engine with none of them; which
 of the two throws was not established.
+
+The `iceberg` reader needs a word, because its AWS dependency is not what it
+looks like. Its CMake asks for `AWSSDK` as `REQUIRED`, with no option to turn
+it off, and names the components `core`, `sso` and `sts` — the credential
+services. The file that uses them builds an AWS credential provider chain and
+signs requests with the SDK's own HTTP client, so the SDK is there to
+authenticate to an AWS-hosted catalog such as Glue or S3 Tables. It does not
+read Parquet; httpfs already does that, which is why no other reader wants any
+of it. There is no iceberg build without the AWS SDK, not even for a table on
+local disk.
+
+That is also the argument against building one. The project's WebAssembly
+branch lists the set explicitly: 30 static archives, including seven
+`aws-cpp-sdk` components and its own `libssl` and `libcrypto`. Those two would
+put a second TLS stack inside `mysqld` beside the server's own OpenSSL, which
+is the same kind of problem as a second allocator.
 
 The `mysql_scanner` reader deserves a caution. It would let a DuckDB query
 `ATTACH` this server over its own connection and read your InnoDB tables, which
