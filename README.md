@@ -476,12 +476,12 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 
 | | What it means | What would remove it |
 |---|---|---|
-| A function returns one value, not rows | `duckdb_query` returns a JSON array and `JSON_TABLE` unpacks it | A row-set return in the extension framework |
+| A function returns one value, not rows | `duckdb_query` returns a JSON array and `JSON_TABLE` unpacks it | [#549](https://github.com/villagesql/villagesql-server/issues/549) |
 | The result is capped | One megabyte by default, 16 MiB at most | See [Returning more than one megabyte](#returning-more-than-one-megabyte) |
-| Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. The `mysql_scanner` reader gets close, over a second connection at a different snapshot | A hook letting an extension read the caller's tables in the caller's transaction |
-| Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | A planner hook |
-| A dataset is not a table | There is no `CREATE FOREIGN TABLE`, and no predicate pushdown from MySQL into DuckDB | Foreign table registration, execution and pushdown hooks |
-| The function cannot tell it was killed | `KILL QUERY` does not reach it, so the extension keeps its own deadline in `timeout_ms` | A way for a function to learn its statement ended |
+| Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. The `mysql_scanner` reader gets close, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
+| Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | [#261](https://github.com/villagesql/villagesql-server/issues/261) |
+| A dataset is not a table | There is no `CREATE FOREIGN TABLE`, and no predicate pushdown from MySQL into DuckDB | [#277](https://github.com/villagesql/villagesql-server/issues/277), [#278](https://github.com/villagesql/villagesql-server/issues/278), [#279](https://github.com/villagesql/villagesql-server/issues/279), and [#142](https://github.com/villagesql/villagesql-server/issues/142) for a DuckDB-backed table |
+| The function cannot tell it was killed | `KILL QUERY` does not reach it, so the extension keeps its own deadline in `timeout_ms` | [#454](https://github.com/villagesql/villagesql-server/issues/454) |
 | The deadline lands between units of work | DuckDB finishes the task in hand before the deadline is checked, so a query can run a little past `timeout_ms`. Measured at 1.016 s against a 1000 ms setting. Setting `timeout_ms` to `0` removes the bound, and then nothing stops a query short of restarting the server | Nothing; it is how DuckDB hands control back |
 | `duckdb_scalar` reads the whole result to return one value | A scalar over a large dataset builds the result in memory first. `memory_limit_mb` bounds it | Streaming the first chunk instead |
 | Iceberg, Delta and Vortex are not bundled | See [Adding more readers](#adding-more-readers) | Nothing; it is a build choice |
