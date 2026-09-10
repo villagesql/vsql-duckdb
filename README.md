@@ -26,6 +26,7 @@ VillageSQL Extension Framework supports today. See
 - [Installing](#installing)
 - [Configuration](#configuration)
 - [Function Reference](#function-reference)
+- [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables)
 - [Returning more than one megabyte](#returning-more-than-one-megabyte)
 - [Adding more readers](#adding-more-readers)
 - [Migrating from PostgreSQL](#migrating-from-postgresql)
@@ -300,6 +301,43 @@ caller who got NULL could not tell an empty bucket from a missing one.
 The DuckDB message comes through in the error, so a wrong path, a denied
 bucket or a bad function name each say so.
 
+## Joining a dataset to your own tables
+
+DuckDB cannot see your tables. Naming one fails in DuckDB's catalog rather
+than in MySQL:
+
+```
+ERROR 3200 (HY000): VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Table with name "shop.regions" does not exist because schema "shop" does not exist.
+```
+
+The join belongs in the outer MySQL query. `JSON_TABLE` turns the JSON array
+into rows, and those rows join against a real table like any others:
+
+```sql
+SELECT t.city, t.total, r.manager
+FROM JSON_TABLE(
+  duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''/path/to/sales.parquet'')
+                GROUP BY city'),
+  '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t
+JOIN shop.regions r ON r.city = t.city
+ORDER BY t.city;
+```
+
+```
++--------+-------+---------+
+| city   | total | manager |
++--------+-------+---------+
+| bergen |     5 | ben     |
+| oslo   |    30 | ana     |
++--------+-------+---------+
+```
+
+DuckDB aggregates the files and MySQL joins the result to your data. One JSON
+string crosses between them, so keep the DuckDB side to counts, sums and
+rollups rather than raw rows — see [Returning more than one
+megabyte](#returning-more-than-one-megabyte). An `s3://` path works the same
+way here as a local one.
+
 ## Returning more than one megabyte
 
 `duckdb_query` refuses a result larger than one megabyte:
@@ -495,7 +533,7 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 | The result is capped, and the cap is refused rather than cut | One megabyte by default. The stable extension SDK cannot report an overflow to the server, so a longer value would come back truncated — and truncated JSON loses its closing bracket and stops parsing. The extension raises an error instead | [#1135](https://github.com/villagesql/villagesql-server/issues/1135), and see [Returning more than one megabyte](#returning-more-than-one-megabyte) |
 | A result cannot be stored in a column | `CREATE TABLE ... AS SELECT duckdb_query(...)` gives `ERROR 1406`, because the column is sized from the width of the SQL text, not the result. Unpack with `JSON_TABLE` instead | `.max_result_length()`, which needs the development ABI |
 | Settings are read through the server, not from their own storage | Reading the storage a system variable points at is unsafe on a query thread, and there is no hook that runs once the variables exist | [#1136](https://github.com/villagesql/villagesql-server/issues/1136) |
-| Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. The `mysql_scanner` reader gets close, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
+| Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. Join its output in the outer query instead — see [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables). The `mysql_scanner` reader would close the gap, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
 | Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | [#261](https://github.com/villagesql/villagesql-server/issues/261) |
 | A dataset is not a table | There is no `CREATE FOREIGN TABLE`, and no predicate pushdown from MySQL into DuckDB | [#277](https://github.com/villagesql/villagesql-server/issues/277), [#278](https://github.com/villagesql/villagesql-server/issues/278), [#279](https://github.com/villagesql/villagesql-server/issues/279), and [#142](https://github.com/villagesql/villagesql-server/issues/142) for a DuckDB-backed table |
 | The function cannot tell it was killed | `KILL QUERY` does not reach it, so the extension keeps its own deadline in `timeout_ms` | [#454](https://github.com/villagesql/villagesql-server/issues/454) |
