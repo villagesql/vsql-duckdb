@@ -60,9 +60,10 @@ jobs:
           DUCKDB_PREBUILT_ROOT: /home/runner/duckdb-stage/duckdb-install
         with:
           extension-name: vsql_duckdb
+          # No villagesql-version, so this takes the action default of nightly.
+          # Every test reads a result with a MySQL JSON function, and a STRING
+          # result is only utf8mb4 on a server newer than 0.0.6.
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # A fixed release, so this build only changes when you change it.
-          villagesql-version: "0.0.6"
 
       # The extension must export nothing but its two entry points, or the
       # dynamic loader can bind a DuckDB call to a mysqld definition of the
