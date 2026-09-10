@@ -1,0 +1,88 @@
+INSTALL EXTENSION vsql_duckdb;
+
+--echo #
+--echo # The engine reports which readers it was built with, and no start-up error
+--echo #
+
+SELECT JSON_EXTRACT(duckdb_status(), '$.readers') AS readers;
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.engine_error')) = '' AS started_cleanly;
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.object_storage_credential'))
+       AS credential;
+
+--echo #
+--echo # duckdb_scalar returns the first column of the first row as text
+--echo #
+
+SELECT duckdb_scalar('SELECT 1 + 1') AS sum_of_two;
+SELECT duckdb_scalar('SELECT ''hello''') AS text_value;
+
+--echo #
+--echo # duckdb_query returns one JSON object per row, keys in column order
+--echo #
+
+SELECT duckdb_query('SELECT 1 AS a, 2 AS b') AS one_row;
+SELECT duckdb_query('SELECT i AS n FROM range(3) t(i) ORDER BY i') AS three_rows;
+
+--echo #
+--echo # Numbers and booleans keep their JSON types; other values become strings
+--echo #
+
+SELECT duckdb_query('SELECT 7 AS i, 1.5 AS d, true AS b, NULL AS n, DATE ''2026-01-02'' AS day')
+       AS typed;
+
+--echo #
+--echo # Quotes and control characters in a value are escaped
+--echo #
+
+SELECT duckdb_query('SELECT ''a"b'' || chr(10) || ''c'' AS s') AS escaped_text;
+
+--echo #
+--echo # The result is utf8mb4, so MySQL JSON functions read it without a cast
+--echo #
+
+SELECT CHARSET(duckdb_query('SELECT 1 AS a')) AS result_charset;
+SELECT JSON_EXTRACT(duckdb_query('SELECT 42 AS a'), '$[0].a') AS extracted;
+
+--echo #
+--echo # A query matching no rows gives an empty array, and no scalar value
+--echo #
+
+SELECT duckdb_query('SELECT 1 WHERE false') AS empty_array;
+SELECT duckdb_scalar('SELECT 1 WHERE false') IS NULL AS scalar_is_null;
+
+--echo #
+--echo # A NULL argument gives NULL, without reaching DuckDB
+--echo #
+
+SELECT duckdb_query(NULL) IS NULL AS query_is_null;
+SELECT duckdb_scalar(NULL) IS NULL AS scalar_is_null;
+
+--echo #
+--echo # A NULL value in the first column is a NULL scalar
+--echo #
+
+SELECT duckdb_scalar('SELECT NULL') IS NULL AS null_value;
+
+--echo #
+--echo # A query DuckDB rejects raises an error rather than returning NULL,
+--echo # because NULL is a legitimate answer here
+--echo #
+
+# DuckDB offers a spelling suggestion whose wording tracks its own catalog,
+# so only the part of the message this extension is responsible for is asserted.
+--replace_regex /Did you mean.*/Did you mean <a similar name>/
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT nosuchfunction()');
+
+--echo #
+--echo # Only one statement per call
+--echo #
+
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT 1; SELECT 2');
+
+--echo #
+--echo # Cleanup
+--echo #
+
+UNINSTALL EXTENSION vsql_duckdb;

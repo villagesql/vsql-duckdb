@@ -1,0 +1,83 @@
+name: test
+on: [pull_request, workflow_dispatch]
+
+env:
+  DUCKDB_PREBUILT_ROOT: /home/runner/duckdb-install
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # httpfs reaches the network through libcurl, which the shared action
+      # below does not install. Needed on every run, cached DuckDB or not.
+      - name: Install libcurl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev
+
+      # DuckDB takes minutes to build and changes only when the tag or the
+      # reader list changes, so the key is built from exactly those two.
+      - name: Read DuckDB tag and readers
+        id: duckdb
+        run: |
+          tag=$(grep -oE 'DUCKDB_TAG "[^"]+"' cmake/DuckDB.cmake | cut -d'"' -f2)
+          readers=$(grep -oE 'DUCKDB_READERS "[^"]+"' cmake/DuckDB.cmake | cut -d'"' -f2)
+          test -n "$tag" && test -n "$readers"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "readers=$readers" >> "$GITHUB_OUTPUT"
+          echo "key=duckdb-${{ runner.os }}-${tag}-${readers//;/-}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore DuckDB
+        id: duckdb-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DUCKDB_PREBUILT_ROOT }}
+          key: ${{ steps.duckdb.outputs.key }}
+
+      - name: Build DuckDB
+        if: steps.duckdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${{ steps.duckdb.outputs.tag }}" \
+            https://github.com/duckdb/duckdb /tmp/duckdb
+          cmake -S /tmp/duckdb -B /tmp/duckdb-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DUCKDB_PREBUILT_ROOT" \
+            -DBUILD_SHELL=0 \
+            -DBUILD_UNITTESTS=0 \
+            -DEXTENSION_STATIC_BUILD=1 \
+            -DENABLE_EXTENSION_AUTOLOADING=0 \
+            -DENABLE_EXTENSION_UPDATING=0 \
+            -DDISABLE_EXTENSION_LOAD=1 \
+            -DENABLE_JEMALLOC=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DOVERRIDE_GIT_DESCRIBE="${{ steps.duckdb.outputs.tag }}" \
+            -DBUILD_EXTENSIONS="${{ steps.duckdb.outputs.readers }}"
+          cmake --build /tmp/duckdb-build -j"$(nproc)"
+          cmake --install /tmp/duckdb-build
+
+      # DUCKDB_PREBUILT_ROOT reaches cmake/DuckDB.cmake through the job
+      # environment, because the shared action calls cmake with a fixed
+      # argument list.
+      - uses: villagesql/extension-actions/cpp@main
+        with:
+          extension-name: vsql_duckdb
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A fixed release, so this build only changes when you change it.
+          villagesql-version: "0.0.6"
+
+      # The extension must export nothing but its two entry points, or the
+      # dynamic loader can bind a DuckDB call to a mysqld definition of the
+      # same third-party symbol.
+      - name: Check exported symbols
+        run: |
+          so=$(find ext-build -name 'vsql_duckdb.so' | head -1)
+          test -n "$so"
+          exported=$(nm -D --defined-only "$so" | grep -c ' T ')
+          echo "exported symbols: $exported"
+          nm -D --defined-only "$so" | grep ' T '
+          test "$exported" -eq 2

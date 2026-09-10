@@ -1,0 +1,41 @@
+INSTALL EXTENSION vsql_duckdb;
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+#
+# Build a small Parquet file to read from
+#
+SELECT duckdb_scalar(@make) AS rows_written;
+rows_written
+3
+#
+# Counting rows in the file
+#
+SELECT duckdb_scalar(@count) AS row_count;
+row_count
+3
+#
+# A grouped rollup comes back as JSON
+#
+SELECT duckdb_query(@rollup) AS rollup_json;
+rollup_json
+[{"city":"bergen","total":5},{"city":"oslo","total":30}]
+#
+# JSON_TABLE turns that array back into rows
+#
+SELECT t.city, t.total
+FROM JSON_TABLE(duckdb_query(@rollup), '$[*]'
+     COLUMNS (city VARCHAR(32) PATH '$.city', total INT PATH '$.total')) AS t
+ORDER BY t.city;
+city	total
+bergen	5
+oslo	30
+#
+# Only the columns a query names are read, so a projection works the same
+#
+SELECT duckdb_scalar(@project) AS largest;
+largest
+20
+#
+# Cleanup
+#
+SET GLOBAL vsql_duckdb.allow_local_files = OFF;
+UNINSTALL EXTENSION vsql_duckdb;

@@ -1,0 +1,97 @@
+INSTALL EXTENSION vsql_duckdb;
+#
+# The engine reports which readers it was built with, and no start-up error
+#
+SELECT JSON_EXTRACT(duckdb_status(), '$.readers') AS readers;
+readers
+["core_functions", "httpfs", "json", "parquet"]
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.engine_error')) = '' AS started_cleanly;
+started_cleanly
+1
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.object_storage_credential'))
+AS credential;
+credential
+not configured
+#
+# duckdb_scalar returns the first column of the first row as text
+#
+SELECT duckdb_scalar('SELECT 1 + 1') AS sum_of_two;
+sum_of_two
+2
+SELECT duckdb_scalar('SELECT ''hello''') AS text_value;
+text_value
+hello
+#
+# duckdb_query returns one JSON object per row, keys in column order
+#
+SELECT duckdb_query('SELECT 1 AS a, 2 AS b') AS one_row;
+one_row
+[{"a":1,"b":2}]
+SELECT duckdb_query('SELECT i AS n FROM range(3) t(i) ORDER BY i') AS three_rows;
+three_rows
+[{"n":0},{"n":1},{"n":2}]
+#
+# Numbers and booleans keep their JSON types; other values become strings
+#
+SELECT duckdb_query('SELECT 7 AS i, 1.5 AS d, true AS b, NULL AS n, DATE ''2026-01-02'' AS day')
+AS typed;
+typed
+[{"i":7,"d":1.5,"b":true,"n":null,"day":"2026-01-02"}]
+#
+# Quotes and control characters in a value are escaped
+#
+SELECT duckdb_query('SELECT ''a"b'' || chr(10) || ''c'' AS s') AS escaped_text;
+escaped_text
+[{"s":"a\"b\nc"}]
+#
+# The result is utf8mb4, so MySQL JSON functions read it without a cast
+#
+SELECT CHARSET(duckdb_query('SELECT 1 AS a')) AS result_charset;
+result_charset
+utf8mb4
+SELECT JSON_EXTRACT(duckdb_query('SELECT 42 AS a'), '$[0].a') AS extracted;
+extracted
+42
+#
+# A query matching no rows gives an empty array, and no scalar value
+#
+SELECT duckdb_query('SELECT 1 WHERE false') AS empty_array;
+empty_array
+[]
+SELECT duckdb_scalar('SELECT 1 WHERE false') IS NULL AS scalar_is_null;
+scalar_is_null
+1
+#
+# A NULL argument gives NULL, without reaching DuckDB
+#
+SELECT duckdb_query(NULL) IS NULL AS query_is_null;
+query_is_null
+1
+SELECT duckdb_scalar(NULL) IS NULL AS scalar_is_null;
+scalar_is_null
+1
+#
+# A NULL value in the first column is a NULL scalar
+#
+SELECT duckdb_scalar('SELECT NULL') IS NULL AS null_value;
+null_value
+1
+#
+# A query DuckDB rejects raises an error rather than returning NULL,
+# because NULL is a legitimate answer here
+#
+SELECT duckdb_scalar('SELECT nosuchfunction()');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Scalar Function with name nosuchfunction does not exist!
+Did you mean <a similar name>
+
+LINE 1: SELECT nosuchfunction()
+               ^
+#
+# Only one statement per call
+#
+SELECT duckdb_scalar('SELECT 1; SELECT 2');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Invalid Input Error: Cannot prepare multiple statements at once!
+#
+# Cleanup
+#
+UNINSTALL EXTENSION vsql_duckdb;

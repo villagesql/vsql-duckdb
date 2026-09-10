@@ -1,0 +1,7 @@
+{
+  global:
+    vef_register;
+    vef_unregister;
+  local:
+    *;
+};

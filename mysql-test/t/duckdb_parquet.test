@@ -1,0 +1,62 @@
+INSTALL EXTENSION vsql_duckdb;
+
+# Writing the fixture, and reading it back, both need the local filesystem.
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+
+--echo #
+--echo # Build a small Parquet file to read from
+--echo #
+
+--disable_query_log
+--let $parquet = $MYSQL_TMP_DIR/duckdb_sales.parquet
+eval SET @make = CONCAT(
+  'COPY (SELECT * FROM (VALUES (1,''oslo'',10),(2,''oslo'',20),(3,''bergen'',5)) ',
+  't(id,city,n)) TO ''', '$parquet', ''' (FORMAT PARQUET)');
+--enable_query_log
+SELECT duckdb_scalar(@make) AS rows_written;
+
+--echo #
+--echo # Counting rows in the file
+--echo #
+
+--disable_query_log
+eval SET @count = CONCAT('SELECT count(*) FROM read_parquet(''', '$parquet', ''')');
+--enable_query_log
+SELECT duckdb_scalar(@count) AS row_count;
+
+--echo #
+--echo # A grouped rollup comes back as JSON
+--echo #
+
+--disable_query_log
+eval SET @rollup = CONCAT(
+  'SELECT city, sum(n) AS total FROM read_parquet(''', '$parquet',
+  ''') GROUP BY city ORDER BY city');
+--enable_query_log
+SELECT duckdb_query(@rollup) AS rollup_json;
+
+--echo #
+--echo # JSON_TABLE turns that array back into rows
+--echo #
+
+SELECT t.city, t.total
+FROM JSON_TABLE(duckdb_query(@rollup), '$[*]'
+     COLUMNS (city VARCHAR(32) PATH '$.city', total INT PATH '$.total')) AS t
+ORDER BY t.city;
+
+--echo #
+--echo # Only the columns a query names are read, so a projection works the same
+--echo #
+
+--disable_query_log
+eval SET @project = CONCAT('SELECT max(n) FROM read_parquet(''', '$parquet', ''')');
+--enable_query_log
+SELECT duckdb_scalar(@project) AS largest;
+
+--echo #
+--echo # Cleanup
+--echo #
+
+--remove_file $parquet
+SET GLOBAL vsql_duckdb.allow_local_files = OFF;
+UNINSTALL EXTENSION vsql_duckdb;

@@ -1,0 +1,101 @@
+INSTALL EXTENSION vsql_duckdb;
+#
+# By default a query cannot read files on the server host
+#
+SELECT duckdb_scalar('SELECT count(*) FROM read_csv(''/etc/hosts'')');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Permission Error: File system LocalFileSystem has been disabled by configuration
+
+LINE 1: SELECT count(*) FROM read_csv('/etc/hosts')
+                             ^
+#
+# Query text cannot loosen the engine it runs in
+#
+SELECT duckdb_query('SET disabled_filesystems = ''''');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Invalid Input Error: Cannot change configuration option "disabled_filesystems" - the configuration has been locked
+SELECT duckdb_query('SET enable_external_access = true');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Invalid Input Error: Cannot change configuration option "enable_external_access" - the configuration has been locked
+SELECT duckdb_query('RESET disabled_filesystems');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Invalid Input Error: Cannot change configuration option "disabled_filesystems" - the configuration has been locked
+#
+# No reader can be fetched or loaded at run time. Local file access is
+# turned on for these, because INSTALL needs somewhere to write and the
+# refusal has to come from the extension loader itself, not from the
+# filesystem being unavailable.
+#
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+SELECT duckdb_query('INSTALL spatial');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Permission Error: Installing external extensions is disabled through a compile time flag
+SELECT duckdb_query('LOAD spatial');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Permission Error: Loading external extensions is disabled through a compile time flag
+#
+# A function belonging to an unbundled reader stays out of the catalog
+#
+SELECT duckdb_scalar('SELECT ST_Point(1,2)');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Scalar Function with name "st_point" is not in the catalog, but it exists in an unbundled reader
+
+Please try installing and loading the spatial extension:
+INSTALL spatial;
+LOAD spatial;
+
+
+SET GLOBAL vsql_duckdb.allow_local_files = OFF;
+#
+# The object storage credential cannot be printed
+#
+SELECT duckdb_query('SELECT * FROM duckdb_secrets(redact=false)');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: Invalid Input Error: Displaying unredacted secrets is disabled
+
+LINE 1: SELECT * FROM duckdb_secrets(redact=false)
+                      ^
+#
+# Naming a keyring secret that cannot be read fails loudly, and says
+# which variable to look at. A secret stored with keyring_key_store()
+# belongs to the account that stored it, and is not an internal key.
+#
+SET GLOBAL vsql_duckdb.s3_key_id = 'AKIAEXAMPLE';
+SET GLOBAL vsql_duckdb.s3_secret_keyring_id = 'no_such_secret';
+SELECT duckdb_scalar('SELECT 1');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: keyring has no secret under data id 'no_such_secret' for owner ''. A key stored with keyring_key_store() belongs to the account that stored it; name that account in vsql_duckdb.s3_secret_keyring_auth_id
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.object_storage_credential'))
+AS credential;
+credential
+not loaded for key id AKIAEXAMPLE
+#
+# Clearing the keyring name leaves the key id in place and the engine working
+#
+SET GLOBAL vsql_duckdb.s3_secret_keyring_id = DEFAULT;
+SELECT duckdb_scalar('SELECT 1') AS working;
+working
+1
+SET GLOBAL vsql_duckdb.s3_key_id = DEFAULT;
+#
+# A result past max_result_bytes is refused, not cut short
+#
+SET GLOBAL vsql_duckdb.max_result_bytes = 2048;
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(200) t(i)');
+ERROR HY000: VDF error in function 'duckdb_query': vsql_duckdb: result reached 2048 bytes at row 31, the limit set by vsql_duckdb.max_result_bytes. Narrow the query or add a LIMIT
+SET GLOBAL vsql_duckdb.max_result_bytes = DEFAULT;
+#
+# A result that fits stays valid JSON
+#
+SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(4) t(i)'))
+AS valid;
+valid
+1
+#
+# A query past timeout_ms is stopped
+#
+SET GLOBAL vsql_duckdb.timeout_ms = 500;
+SELECT duckdb_scalar('SELECT sum(hash(a.i * b.i)) FROM range(1000000) a(i), range(100000) b(i)');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: query passed vsql_duckdb.timeout_ms (500 ms) and was stopped
+SET GLOBAL vsql_duckdb.timeout_ms = DEFAULT;
+#
+# The engine still answers after a query was stopped
+#
+SELECT duckdb_scalar('SELECT 1') AS still_working;
+still_working
+1
+#
+# Cleanup
+#
+UNINSTALL EXTENSION vsql_duckdb;

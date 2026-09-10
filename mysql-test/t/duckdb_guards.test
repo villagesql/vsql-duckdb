@@ -1,0 +1,111 @@
+INSTALL EXTENSION vsql_duckdb;
+
+--echo #
+--echo # By default a query cannot read files on the server host
+--echo #
+
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT count(*) FROM read_csv(''/etc/hosts'')');
+
+--echo #
+--echo # Query text cannot loosen the engine it runs in
+--echo #
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('SET disabled_filesystems = ''''');
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('SET enable_external_access = true');
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('RESET disabled_filesystems');
+
+--echo #
+--echo # No reader can be fetched or loaded at run time. Local file access is
+--echo # turned on for these, because INSTALL needs somewhere to write and the
+--echo # refusal has to come from the extension loader itself, not from the
+--echo # filesystem being unavailable.
+--echo #
+
+SET GLOBAL vsql_duckdb.allow_local_files = ON;
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('INSTALL spatial');
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('LOAD spatial');
+
+--echo #
+--echo # A function belonging to an unbundled reader stays out of the catalog
+--echo #
+
+--replace_regex /but it exists in the .* extension.*/but it exists in an unbundled reader/
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT ST_Point(1,2)');
+
+SET GLOBAL vsql_duckdb.allow_local_files = OFF;
+
+--echo #
+--echo # The object storage credential cannot be printed
+--echo #
+
+--error ER_UDF_ERROR
+SELECT duckdb_query('SELECT * FROM duckdb_secrets(redact=false)');
+
+--echo #
+--echo # Naming a keyring secret that cannot be read fails loudly, and says
+--echo # which variable to look at. A secret stored with keyring_key_store()
+--echo # belongs to the account that stored it, and is not an internal key.
+--echo #
+
+SET GLOBAL vsql_duckdb.s3_key_id = 'AKIAEXAMPLE';
+SET GLOBAL vsql_duckdb.s3_secret_keyring_id = 'no_such_secret';
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT 1');
+SELECT JSON_UNQUOTE(JSON_EXTRACT(duckdb_status(), '$.object_storage_credential'))
+       AS credential;
+
+--echo #
+--echo # Clearing the keyring name leaves the key id in place and the engine working
+--echo #
+
+SET GLOBAL vsql_duckdb.s3_secret_keyring_id = DEFAULT;
+SELECT duckdb_scalar('SELECT 1') AS working;
+SET GLOBAL vsql_duckdb.s3_key_id = DEFAULT;
+
+--echo #
+--echo # A result past max_result_bytes is refused, not cut short
+--echo #
+
+SET GLOBAL vsql_duckdb.max_result_bytes = 2048;
+--error ER_UDF_ERROR
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(200) t(i)');
+SET GLOBAL vsql_duckdb.max_result_bytes = DEFAULT;
+
+--echo #
+--echo # A result that fits stays valid JSON
+--echo #
+
+SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(4) t(i)'))
+       AS valid;
+
+--echo #
+--echo # A query past timeout_ms is stopped
+--echo #
+
+SET GLOBAL vsql_duckdb.timeout_ms = 500;
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT sum(hash(a.i * b.i)) FROM range(1000000) a(i), range(100000) b(i)');
+SET GLOBAL vsql_duckdb.timeout_ms = DEFAULT;
+
+--echo #
+--echo # The engine still answers after a query was stopped
+--echo #
+
+SELECT duckdb_scalar('SELECT 1') AS still_working;
+
+--echo #
+--echo # Cleanup
+--echo #
+
+UNINSTALL EXTENSION vsql_duckdb;
