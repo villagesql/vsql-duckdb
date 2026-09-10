@@ -18,11 +18,13 @@
 #
 # Set DUCKDB_PREBUILT_ROOT to reuse a DuckDB tree that was already built with
 # the same options; otherwise DuckDB is fetched at DUCKDB_TAG and built here.
+# DUCKDB_READERS then has to name exactly that tree's readers, because its
+# generated loader refers to every one of them.
 #
 # DUCKDB_READERS selects which DuckDB extensions are linked in. Every name in
 # the list must be either an in-tree DuckDB extension or a file named
-# <name>.cmake under duckdb/.github/config/extensions/. Readers that need
-# vcpkg packages also need VCPKG_TOOLCHAIN_PATH — see README.
+# <name>.cmake under duckdb/.github/config/extensions/. Only httpfs and json
+# are known to work; the README says where each of the others stops.
 
 include(ExternalProject)
 include(FetchContent)

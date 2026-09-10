@@ -49,7 +49,7 @@ first time and is then reused. Nothing is downloaded at run time.
 
 | | |
 |---|---|
-| A VillageSQL build or dev server, 0.0.6 or newer | |
+| A VillageSQL build or dev server newer than 0.0.6 | On 0.0.6 a `STRING` result carries the binary character set, and MySQL's JSON functions reject it |
 | A C++17 compiler and CMake 3.18 or newer | |
 | OpenSSL and libcurl development headers | DuckDB's HTTP reader uses both |
 | Git | DuckDB is fetched from its own repository at a pinned tag |
@@ -99,8 +99,8 @@ the server where that is with `SHOW VARIABLES LIKE 'veb_dir'`.
 | Option | Default | Meaning |
 |---|---|---|
 | `DUCKDB_TAG` | `v1.5.5` | The DuckDB release to build against |
-| `DUCKDB_READERS` | `httpfs;json` | Which DuckDB readers to link in. `parquet` and `core_functions` are always present |
-| `DUCKDB_PREBUILT_ROOT` | empty | Reuse a DuckDB tree built earlier with the same options, instead of building one |
+| `DUCKDB_READERS` | `httpfs;json` | Which DuckDB readers to link in. `parquet` and `core_functions` are always present. Only the default pair works — see [Adding more readers](#adding-more-readers) |
+| `DUCKDB_PREBUILT_ROOT` | empty | Reuse a DuckDB tree built earlier, instead of building one. `DUCKDB_READERS` must name exactly that tree's readers |
 | `VCPKG_TOOLCHAIN_PATH` | empty | Needed only by readers that depend on vcpkg packages |
 
 ## Installing
@@ -371,40 +371,34 @@ carries the same development-ABI decision as above.
 
 ## Adding more readers
 
-`DUCKDB_READERS` takes any DuckDB reader. Some need a Rust toolchain, and some
-need vcpkg packages. Measured on ten cores:
+`DUCKDB_READERS` links a reader's `lib<name>_extension.a` into the extension.
+Only `httpfs` and `json` are known to work, alongside the always-present
+`parquet` and `core_functions`. That build takes 124 s cold on ten cores.
 
-| Readers | Cold build | Extra tooling |
-|---|---|---|
-| `httpfs;json` (the default) | 124 s | none |
-| plus `delta;vortex` | 389 s | a Rust toolchain |
-| plus `iceberg` | not measured | vcpkg, for `avro-c`, `roaring` and `aws-sdk-cpp` |
-| plus `mysql_scanner` | not measured | vcpkg, for `libmariadb` |
+The other four readers do not produce a working build today:
 
-Delta and Vortex, with Rust installed:
+| Reader | Where it stops |
+|---|---|
+| `delta` | Links only if `libdelta_kernel_ffi.a` (108 MB) and the platform frameworks its Rust half needs are added by hand |
+| `vortex` | The same, with `libvortex_duckdb.a` (128 MB). Its `libvortex_extension.a` is a shim holding no reader code |
+| `iceberg` | Does not configure without vcpkg, for `avro-c`, `roaring` and `aws-sdk-cpp` |
+| `mysql_scanner` | Does not configure without vcpkg, for `libmariadb` |
 
-```bash
-cmake -S . -B build -DVillageSQL_BUILD_DIR="$VillageSQL_BUILD_DIR" \
-      -DDUCKDB_READERS="httpfs;json;delta;vortex"
-```
-
-Iceberg and the MySQL reader additionally need a vcpkg toolchain:
-
-```bash
-git clone https://github.com/microsoft/vcpkg /opt/vcpkg
-/opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
-cmake -S . -B build -DVillageSQL_BUILD_DIR="$VillageSQL_BUILD_DIR" \
-      -DDUCKDB_READERS="httpfs;json;iceberg" \
-      -DVCPKG_TOOLCHAIN_PATH=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake
-```
+A Rust reader is two archives, and DuckDB installs only the C++ half into its
+install prefix. The link list here names only that half, which is why `delta`
+and `vortex` do not link. With both archives supplied by hand they do link, and
+the engine then starts with no readers at all and reports that it cannot load
+`parquet`. DuckDB loads its linked readers in one loop with no error handling,
+so one reader throwing during load leaves the engine with none of them; which
+of the two throws was not established.
 
 The `mysql_scanner` reader deserves a caution. It would let a DuckDB query
 `ATTACH` this server over its own connection and read your InnoDB tables, which
 makes a join between a Parquet file and a table reachable. It comes with real
 costs: it is a second client session, so it reads a different snapshot than the
 statement that called it, it takes a connection from the pool, and it blocks if
-the caller holds locks on the rows it wants. It is not in the default build for
-those reasons rather than for build cost.
+the caller holds locks on the rows it wants. Those costs, not build time, are
+why it would stay out of the default build even once it configures.
 
 ## Migrating from PostgreSQL
 
@@ -507,7 +501,7 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 | The function cannot tell it was killed | `KILL QUERY` does not reach it, so the extension keeps its own deadline in `timeout_ms` | [#454](https://github.com/villagesql/villagesql-server/issues/454) |
 | The deadline lands between units of work | DuckDB finishes the task in hand before the deadline is checked, so a query can run a little past `timeout_ms`. Measured at 1.016 s against a 1000 ms setting. Setting `timeout_ms` to `0` removes the bound, and then nothing stops a query short of restarting the server | Nothing; it is how DuckDB hands control back |
 | `duckdb_scalar` reads the whole result to return one value | A scalar over a large dataset builds the result in memory first. `memory_limit_mb` bounds it | Streaming the first chunk instead |
-| Iceberg, Delta and Vortex are not bundled | See [Adding more readers](#adding-more-readers) | Nothing; it is a build choice |
+| Only four readers work | `httpfs`, `json`, `parquet` and `core_functions`. Delta, Vortex, Iceberg and `mysql_scanner` all fail to build or to start — see [Adding more readers](#adding-more-readers) | Link wiring for the Rust archives, and vcpkg for the other two |
 | The version stays below 1.0.0 | The extension declares the `sys_var` and `keyring` preview capabilities, and either may change under it | Those two capabilities reaching general availability |
 | Reinstalling resets the settings | `UNINSTALL` then `INSTALL` puts every variable back to its default in the running server, including values set with `SET PERSIST` | Re-apply them, or restart the server |
 | Local files and spilling are one switch | `allow_local_files = OFF` also stops DuckDB spilling to disk | Nothing; DuckDB gates both through one setting |
