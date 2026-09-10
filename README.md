@@ -310,46 +310,64 @@ reached 1048576 bytes at row 8748, the limit set by vsql_duckdb.max_result_bytes
 Narrow the query or add a LIMIT
 ```
 
-Raising `vsql_duckdb.max_result_bytes` alone does not lift it. The real ceiling
-is the result buffer the function declares at registration, and on the stable
-extension protocol a longer value is **cut to exactly that many bytes with no
-warning**. This extension therefore refuses rather than returning a truncated
-value that looks like valid output but is not.
+Raising `vsql_duckdb.max_result_bytes` alone does not lift it. The extension is
+built against the stable extension SDK, whose result writer copies what fits
+and reports only that much, so the server is never told the value overflowed
+and cannot grow the buffer. A result past the buffer would come back cut, with
+no warning. The extension refuses instead, because a cut JSON array loses its
+closing bracket and no longer parses.
 
-The framework can carry up to 16 MiB, through `.max_result_length()` on the
-function builder. That call raises the extension's required protocol to 4,
-which is the development ABI: it is shipped and tested, but it is not the
-stable surface, and an extension built against it needs the matching server.
+The development SDK's writer reports the full size, and the server then grows
+the buffer and calls the function again. Measured on
+`mysql-8.4_0.0.7-dev`, same server, one probe extension built each way against
+a 1 KiB buffer: the development build returned 5000 bytes after two calls with
+the buffer grown to 5120, and the stable build returned 1024 bytes after one
+call. A 20 MB result came back whole on the development build.
 
-To take that route:
+So the way to lift the ceiling is to build against the development ABI. That
+is a real decision, not a flag: the development ABI is shipped and tested, but
+it is not the stable surface, and an extension built against it needs a server
+that matches.
 
-1. Build the SDK's development ABI into the extension. `FindVillageSQL.cmake`
-   picks the SDK's `include/` tree by default; point it at `include-dev/`
-   instead, and confirm the compiler sees `include-dev` before `include`.
-2. In `src/vsql_duckdb.cc`, raise `kQueryBufferSize` and add a matching
-   `.max_result_length()` to the `duckdb_query` registration, after
-   `.returns(STRING)`:
+To take that route, point the include path at the SDK's `include-dev` tree
+ahead of `include`, and raise the upper bound of `max_result_bytes` in
+`src/settings.h`. Then confirm on your target server that a large result comes
+back whole:
 
-   ```cpp
-   .func(make_func<&duckdb_query_impl>("duckdb_query")
-             .returns(STRING)
-             .max_result_length(16 * 1024 * 1024)
-             .param(STRING)
-             .buffer_size(kQueryBufferSize)
-             .build())
-   ```
-
-3. Raise the upper bound of `max_result_bytes` in `src/settings.h` to match.
-4. Rebuild, and confirm on your target server that a result above one megabyte
-   still returns valid JSON:
-
-   ```sql
-   SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',100) AS pad FROM range(20000) t(i)'));
-   ```
+```sql
+SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',100) AS pad FROM range(20000) t(i)'));
+```
 
 Before doing any of that, consider whether the query should return fewer rows.
-The extension is built for counts, sums and low-cardinality rollups, and a
-result of that shape does not approach the limit.
+This is built for counts, sums and low-cardinality rollups, and a result of
+that shape does not approach the limit.
+
+### Storing a result in a table
+
+`CREATE TABLE ... AS SELECT duckdb_query(...)` fails for all but the smallest
+results, on either ABI:
+
+```
+ERROR 1406 (22001): Data too long for column 'v' at row 1
+```
+
+The column is sized from the width of the SQL text you passed in, not from the
+result. Measured: a query whose text was 112 characters produced
+`varchar(112)`, so only a result shorter than the query that made it will
+store. It is an honest error rather than a silent truncation, but it means the
+result has to be consumed where it is produced.
+
+Unpack it into real columns instead of storing the array:
+
+```sql
+CREATE TABLE totals AS
+SELECT t.city, t.total
+FROM JSON_TABLE(duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s3://b/*.parquet'') GROUP BY city'),
+     '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t;
+```
+
+Declaring `.max_result_length()` on the function would widen the column, and
+carries the same development-ABI decision as above.
 
 ## Adding more readers
 
