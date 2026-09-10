@@ -143,9 +143,10 @@ the value survives a restart.
 | `s3_secret_keyring_id` | empty | The keyring data id holding the secret access key |
 | `s3_secret_keyring_auth_id` | empty | Which keyring owner holds that secret. See below |
 
-The secret access key never appears in SQL and is never written to disk. It
-comes from the server's keyring, and these variables only name where to find
-it.
+These variables only name where the secret access key lives; none of them
+holds it. The extension never writes the key to disk and never puts it in a
+setting. The key does pass through SQL once, in the `keyring_key_store()` call
+below, and after that it rests wherever the keyring component keeps it.
 
 The server needs a keyring component for any of this; without one, leave
 `s3_key_id` empty and public buckets are still readable. Storing the secret
@@ -368,9 +369,11 @@ it is not the stable surface, and an extension built against it needs a server
 that matches.
 
 To take that route, point the include path at the SDK's `include-dev` tree
-ahead of `include`, and raise the upper bound of `max_result_bytes` in
-`src/settings.h`. Then confirm on your target server that a large result comes
-back whole:
+ahead of `include`, and raise `kQueryBufferSize` in `src/vsql_duckdb.cc` or
+declare `.max_result_length()`. That constant is the real ceiling —
+`effective_cap()` clamps to it whatever `max_result_bytes` says — and
+`src/settings.h` already admits up to 16 MB, so it needs no edit below that.
+Then confirm on your target server that a large result comes back whole:
 
 ```sql
 SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',100) AS pad FROM range(20000) t(i)'));
@@ -390,10 +393,11 @@ ERROR 1406 (22001): Data too long for column 'v' at row 1
 ```
 
 The column is sized from the width of the SQL text you passed in, not from the
-result. Measured: a query whose text was 112 characters produced
-`varchar(112)`, so only a result shorter than the query that made it will
-store. It is an honest error rather than a silent truncation, but it means the
-result has to be consumed where it is produced.
+result. Measured on a `utf8mb4` connection: a query whose text was 112
+characters produced `varchar(448)`, four bytes per character, so only a result
+several times shorter than the query that made it will store. It is an honest
+error rather than a silent truncation, but it means the result has to be
+consumed where it is produced.
 
 Unpack it into real columns instead of storing the array:
 
@@ -440,11 +444,11 @@ read Parquet; httpfs already does that, which is why no other reader wants any
 of it. There is no iceberg build without the AWS SDK, not even for a table on
 local disk.
 
-That is also the argument against building one. The project's WebAssembly
-branch lists the set explicitly: 30 static archives, including seven
-`aws-cpp-sdk` components and its own `libssl` and `libcrypto`. Those two would
-put a second TLS stack inside `mysqld` beside the server's own OpenSSL, which
-is the same kind of problem as a second allocator.
+That is also the argument against building one. The Emscripten branch of its
+own `CMakeLists.txt` lists the set explicitly: 30 static archives, including
+eight `aws-cpp-sdk` components and its own `libssl` and `libcrypto`. Those two
+would put a second TLS stack inside `mysqld` beside the server's own OpenSSL,
+which is the same kind of problem as a second allocator.
 
 The `mysql_scanner` reader deserves a caution. It would let a DuckDB query
 `ATTACH` this server over its own connection and read your InnoDB tables, which
@@ -462,9 +466,9 @@ why it would stay out of the default build even once it configures.
 |---|---|---|
 | `duckdb.query(sql)` | `duckdb_query(sql)` | Returns a JSON array, not a row set. Use `JSON_TABLE` to get rows |
 | `duckdb.raw_query(sql)` | `duckdb_query(sql)` | There is no server log to print to, so the result comes back instead |
-| `duckdb.recycle_ddb()` | none needed | One instance serves the whole server and nothing accumulates per connection. Changing a setting replaces it |
+| `duckdb.recycle_ddb()` | no equivalent | One instance serves the whole server, so a table or macro any caller creates is visible to every other caller until a setting change replaces the instance |
 | `read_parquet`, `read_csv`, `read_json`, `read_text`, `read_blob` | the same names, inside the query text | They are DuckDB functions, not MySQL functions |
-| `duckdb.create_simple_secret(...)` | `vsql_duckdb.s3_*` variables plus the keyring | The secret never passes through SQL |
+| `duckdb.create_simple_secret(...)` | `vsql_duckdb.s3_*` variables plus the keyring | No setting holds the secret; the variables only name the keyring entry that does |
 | MAP, union, JSON, time functions, `approx_count_distinct`, `TABLESAMPLE` | the same names, inside the query text | Reachable through `duckdb_query`, not as MySQL functions |
 | `duckdb.install_extension`, `load_extension`, `autoload_extension` | none | Refused by design. Readers ship inside the bundle. See Security Considerations |
 | `iceberg_scan`, `iceberg_metadata`, `iceberg_snapshots`, `delta_scan`, `read_vortex` | not in the default build | See [Adding more readers](#adding-more-readers) |
@@ -557,7 +561,7 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 | `duckdb_scalar` reads the whole result to return one value | A scalar over a large dataset builds the result in memory first. `memory_limit_mb` bounds it | Streaming the first chunk instead |
 | Only four readers work | `httpfs`, `json`, `parquet` and `core_functions`. Delta, Vortex, Iceberg and `mysql_scanner` all fail to build or to start — see [Adding more readers](#adding-more-readers) | Link wiring for the Rust archives, and vcpkg for the other two |
 | The version stays below 1.0.0 | The extension declares the `sys_var` and `keyring` preview capabilities, and either may change under it | Those two capabilities reaching general availability |
-| Reinstalling resets the settings | `UNINSTALL` then `INSTALL` puts every variable back to its default in the running server, including values set with `SET PERSIST` | Re-apply them, or restart the server |
+| Reinstalling resets the settings | `UNINSTALL` then `INSTALL` puts every variable back to its default. `UNINSTALL` also deletes them from `mysqld-auto.cnf`, so a restart does not bring a `SET PERSIST` value back | Re-apply them |
 | Local files and spilling are one switch | `allow_local_files = OFF` also stops DuckDB spilling to disk | Nothing; DuckDB gates both through one setting |
 
 ## Security Considerations
@@ -619,8 +623,10 @@ Within that, the engine is closed as tightly as DuckDB allows.
 - **The credential cannot be printed.** The secret access key is stored as a
   DuckDB secret rather than a setting, because a setting can be read back with
   `current_setting()`. Printing secrets unredacted is disabled and locked, so
-  `duckdb_secrets(redact=false)` is refused. The key is never written to disk,
-  never appears in SQL, and never appears in `duckdb_status()`.
+  `duckdb_secrets(redact=false)` is refused. The extension never writes the key
+  to disk and it never appears in `duckdb_status()`. It reaches the keyring
+  through one SQL statement, `keyring_key_store()`, which puts it in that
+  session's history and in the general query log if one is running.
 - **A runaway query stops itself.** `timeout_ms` bounds every call, because a
   function cannot learn that its statement was killed.
 - **DuckDB's memory and threads are bounded** by `memory_limit_mb` and
