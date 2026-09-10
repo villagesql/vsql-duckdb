@@ -46,6 +46,22 @@ SELECT duckdb_scalar('SELECT ST_Point(1,2)');
 SET GLOBAL vsql_duckdb.allow_local_files = OFF;
 
 --echo #
+--echo # Turning off external access refuses every remote read, which is the
+--echo # only control in this extension that closes the reach of the HTTP
+--echo # reader. It refuses object storage too; that is the trade.
+--echo #
+
+SET GLOBAL vsql_duckdb.enable_external_access = OFF;
+
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT count(*) FROM read_text(''https://example.com/'')');
+
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://a-bucket/x.parquet'')');
+
+SET GLOBAL vsql_duckdb.enable_external_access = DEFAULT;
+
+--echo #
 --echo # The object storage credential cannot be printed
 --echo #
 

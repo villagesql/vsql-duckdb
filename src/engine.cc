@@ -62,6 +62,35 @@ void apply_startup_options(duckdb::DBConfig &config, const Settings &s) {
   config.SetOptionByName("allow_unredacted_secrets", duckdb::Value::BOOLEAN(false));
 }
 
+// Refuses a DuckDB that can still fetch and load a reader at run time.
+//
+// The whole security story rests on DuckDB being compiled with
+// DISABLE_EXTENSION_LOAD, because otherwise a caller's own query text can say
+// INSTALL <reader> and make the database pull a shared library off the network
+// and load it into mysqld. A compile flag in a build file is the kind of guard
+// that goes missing quietly -- it did once here, present in the CI recipe and
+// absent from the one the README documents -- so the extension asks the engine
+// it actually linked rather than trusting how it was built.
+//
+// Fails closed. If a later DuckDB rewords the refusal, this reports a build
+// problem rather than quietly serving queries with the guard gone, and the
+// test suite says so on the first run after the version bump.
+std::string check_extension_load_disabled(duckdb::Connection &con) {
+  auto res = con.Query("LOAD vsql_duckdb_probe_no_such_reader");
+  if (!res->HasError()) {
+    return "DuckDB loaded an unknown reader, so this build can load code at "
+           "run time. Rebuild DuckDB with -DDISABLE_EXTENSION_LOAD=1";
+  }
+  const std::string error = res->GetError();
+  if (error.find("compile time flag") == std::string::npos) {
+    return "DuckDB was built without -DDISABLE_EXTENSION_LOAD=1, so a query "
+           "could install and load code into the server. Rebuild DuckDB with "
+           "that flag. The engine refused the probe with: " +
+           error;
+  }
+  return {};
+}
+
 // Closes the instance to further configuration. Everything a caller must not
 // be able to undo from inside their own query text is settled by the time this
 // runs: lock_configuration then refuses every SET and RESET, and
@@ -70,6 +99,11 @@ void apply_startup_options(duckdb::DBConfig &config, const Settings &s) {
 // disabled_filesystems is here rather than in the startup options because
 // DuckDB rejects it before the instance starts.
 std::string seal(duckdb::Connection &con, const Settings &s) {
+  // Asked before the filesystem is taken away, so the answer comes from the
+  // extension loader rather than from a file it could not reach.
+  std::string wrong_build = check_extension_load_disabled(con);
+  if (!wrong_build.empty()) return wrong_build;
+
   // Reading and writing local files is one switch in DuckDB, so turning it off
   // also stops DuckDB spilling to disk. A query that needs more than
   // memory_limit_mb then fails instead of writing to the server's filesystem.

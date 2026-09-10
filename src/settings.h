@@ -120,13 +120,26 @@ inline void note_change(vsql::preview_sys_var::SysVarChange) {
   g_settings_primed = true;
 }
 
+// Fills the cache for the first time, by asking the server for each value
+// rather than reading the raw globals.
+//
+// The globals cannot be read safely from here. A SET on a string variable
+// frees the buffer the old pointer names, and this runs on a query thread
+// with nothing holding the server's system-variable lock, so a first query
+// racing a first SET could read memory that has just gone away. The
+// capability's own get() asks the server, which reads under that lock.
+//
+// It has to happen here rather than at registration: on_init() runs before
+// the server installs the variables, so priming there would freeze every
+// setting at its compiled default until someone happened to run a SET.
+// Declared below, because it needs the capability object.
+void prime_cache_locked();
+
 // The only supported read. Returns one consistent set of values.
 inline Settings snapshot() {
   std::lock_guard<std::mutex> lock(g_settings_mu);
   if (!g_settings_primed) {
-    // No SET has happened yet, so the cache still has to be filled from the
-    // values the server installed at registration.
-    g_settings_cache = read_globals();
+    prime_cache_locked();
     g_settings_primed = true;
   }
   return g_settings_cache;
@@ -186,6 +199,46 @@ inline auto g_sys_vars = sv::make_capability({
 });
 
 inline vsql::preview_keyring::KeyringCapability g_keyring;
+
+// See the declaration above snapshot() for why this asks the server instead
+// of reading the globals.
+inline void prime_cache_locked() {
+  const char *kExtension = "vsql_duckdb";
+  auto text = [&](const char *name, std::string &out) {
+    std::string value;
+    if (!g_sys_vars.get(kExtension, name, value)) out = std::move(value);
+  };
+  auto flag = [&](const char *name, bool &out) {
+    std::string value;
+    if (g_sys_vars.get(kExtension, name, value)) return;
+    // The server spells a boolean "ON"/"OFF" here, and older ones "1"/"0".
+    out = value == "ON" || value == "on" || value == "1";
+  };
+  auto number = [&](const char *name, long long &out) {
+    std::string value;
+    if (g_sys_vars.get(kExtension, name, value)) return;
+    try {
+      out = std::stoll(value);
+    } catch (const std::exception &) {
+      // Leave the compiled default rather than a wrong number.
+    }
+  };
+
+  text("s3_region", g_settings_cache.s3_region);
+  text("s3_endpoint", g_settings_cache.s3_endpoint);
+  text("s3_url_style", g_settings_cache.s3_url_style);
+  text("s3_key_id", g_settings_cache.s3_key_id);
+  text("s3_secret_keyring_id", g_settings_cache.s3_secret_keyring_id);
+  text("s3_secret_keyring_auth_id", g_settings_cache.s3_secret_keyring_auth_id);
+  text("temp_directory", g_settings_cache.temp_directory);
+  flag("s3_use_ssl", g_settings_cache.s3_use_ssl);
+  flag("enable_external_access", g_settings_cache.enable_external_access);
+  flag("allow_local_files", g_settings_cache.allow_local_files);
+  number("memory_limit_mb", g_settings_cache.memory_limit_mb);
+  number("threads", g_settings_cache.threads);
+  number("timeout_ms", g_settings_cache.timeout_ms);
+  number("max_result_bytes", g_settings_cache.max_result_bytes);
+}
 
 }  // namespace vsql_duckdb
 

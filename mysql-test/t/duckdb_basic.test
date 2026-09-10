@@ -1,7 +1,10 @@
 INSTALL EXTENSION vsql_duckdb;
 
 --echo #
---echo # The engine reports which readers it was built with, and no start-up error
+--echo # The engine reports which readers it was built with, and no start-up
+--echo # error. An empty error also means the engine passed its own check that
+--echo # DuckDB was compiled with extension loading removed; a DuckDB built
+--echo # without that refuses to answer any query and says so here.
 --echo #
 
 SELECT JSON_EXTRACT(duckdb_status(), '$.readers') AS readers;

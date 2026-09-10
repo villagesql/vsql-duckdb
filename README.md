@@ -254,6 +254,9 @@ FROM JSON_TABLE(duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s
 
 - A NULL argument returns NULL, without reaching DuckDB.
 - A query matching no rows returns `[]`.
+- Two columns with the same name produce two keys with that name in each
+  object. That parses, but which one a JSON reader gives you back is its
+  choice. Alias them apart.
 - A query DuckDB rejects raises an error. It does not return NULL — see
   [Errors, not NULL](#errors-not-null).
 - Only one statement per call. A second statement is rejected.
@@ -498,6 +501,33 @@ grantable the way stored functions are, so there is no way to limit them to one
 role. Treat installing this extension as granting every user of the server read
 access to the buckets you configure. If that is not what you want, do not
 configure a credential with wider reach than every user should have.
+
+**A caller can make the server fetch any URL.** This is the surface that
+surprises people, so read it before installing. The bundled HTTP reader is
+what makes `s3://` work, and it is not limited to object storage:
+
+```sql
+SELECT duckdb_scalar('SELECT content FROM read_text(''https://anything.example/'')');
+```
+
+That request leaves the database host, from the database process, with the
+database's network position. On a cloud instance the dangerous target is the
+metadata endpoint at `169.254.169.254`: where IMDSv1 is enabled, a caller can
+read the instance's IAM role credentials, which is a larger compromise than
+the object storage key this extension is configured with, and does not depend
+on that key at all. Internal services that trust the database's address are
+reachable the same way.
+
+Neither DuckDB nor its HTTP reader offers a host allowlist, so there is no
+setting here that permits `s3://` while refusing everything else. What you can
+do:
+
+- Require IMDSv2 on the instance, or block egress to `169.254.169.254`.
+- Restrict the host's outbound traffic to the object storage endpoints you
+  actually use.
+- Set `vsql_duckdb.enable_external_access = OFF` where you do not need object
+  storage. It refuses every remote read, `s3://` included, and is the only
+  control inside the extension that closes this.
 
 Within that, the engine is closed as tightly as DuckDB allows.
 

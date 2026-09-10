@@ -44,7 +44,8 @@ deciding factor.
 | `src/json_writer.h` / `src/json_writer.cc` | Turning a DuckDB result into JSON |
 | `src/vsql_duckdb.cc` | The three VEF entry points and the registration block |
 | `src/exported_symbols.txt` / `.map` | The two symbols the shared object may export |
-| `cmake/DuckDB.cmake` | Fetching and building DuckDB, and choosing its readers |
+| `cmake/DuckDB.cmake` | Fetching and building DuckDB, and choosing its readers. The only recipe |
+| `cmake/duckdb-standalone` | Drives that recipe on its own, for a caller that has to build DuckDB ahead of the extension |
 | `mysql-test/t`, `mysql-test/r` | MTR tests and their recorded output |
 
 ## Building
@@ -85,6 +86,19 @@ Change any of these only with a reason written into the same commit.
   and network surface this extension did not choose. The compile-time flag
   removes the path rather than leaving it resting on two settings staying
   correct.
+
+  **The extension no longer trusts that this was done.** This flag once lived
+  in the CI recipe and not in `cmake/DuckDB.cmake`, so the build the README
+  documents produced a vulnerable bundle while CI stayed green.
+  `check_extension_load_disabled()` in `src/engine.cc` now asks the engine
+  that was actually linked, and refuses to answer any query if the guard is
+  missing. It fails closed: if a later DuckDB rewords its refusal the probe
+  reports a build problem rather than serving queries with the guard gone, and
+  `duckdb_basic.test` catches that on the first run after a version bump.
+
+  There is one build recipe, in `cmake/DuckDB.cmake`. A caller who needs
+  DuckDB built ahead of time drives it through `cmake/duckdb-standalone`
+  rather than writing a second copy.
 - **`-DENABLE_JEMALLOC=OFF`.** A second allocator inside `mysqld` is not
   acceptable.
 - **The linker export lists.** `src/exported_symbols.txt` (macOS) and

@@ -40,6 +40,23 @@ LOAD spatial;
 
 SET GLOBAL vsql_duckdb.allow_local_files = OFF;
 #
+# Turning off external access refuses every remote read, which is the
+# only control in this extension that closes the reach of the HTTP
+# reader. It refuses object storage too; that is the trade.
+#
+SET GLOBAL vsql_duckdb.enable_external_access = OFF;
+SELECT duckdb_scalar('SELECT count(*) FROM read_text(''https://example.com/'')');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Permission Error: Cannot access file "https://example.com/" - file system operations are disabled by configuration
+
+LINE 1: SELECT count(*) FROM read_text('https://example.com/')
+                             ^
+SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://a-bucket/x.parquet'')');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Permission Error: Cannot access file "s3://a-bucket/x.parquet" - file system operations are disabled by configuration
+
+LINE 1: SELECT count(*) FROM read_parquet('s3://a-bucket/x.parquet')
+                             ^
+SET GLOBAL vsql_duckdb.enable_external_access = DEFAULT;
+#
 # The object storage credential cannot be printed
 #
 SELECT duckdb_query('SELECT * FROM duckdb_secrets(redact=false)');

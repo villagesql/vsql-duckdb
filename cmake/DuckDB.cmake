@@ -95,6 +95,14 @@ else()
       -DEXTENSION_STATIC_BUILD=1
       -DENABLE_EXTENSION_AUTOLOADING=0
       -DENABLE_EXTENSION_UPDATING=0
+      # Compiles DuckDB's install-and-load path out entirely. Without this a
+      # caller's own query text can write "INSTALL <reader>" and make the
+      # database fetch a shared library from a third-party host and load it
+      # into mysqld. Turning off autoinstall and autoload does NOT cover that;
+      # they only stop DuckDB reaching for a reader by itself. The extension
+      # refuses to serve queries if it finds this was left off -- see
+      # check_extension_load_disabled() in src/engine.cc.
+      -DDISABLE_EXTENSION_LOAD=1
       # A second allocator inside mysqld is not acceptable.
       -DENABLE_JEMALLOC=OFF
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON

@@ -34,11 +34,15 @@ exports more, DuckDB's copy of a third-party library can be bound to
 `mysqld`'s copy of the same library:
 
 ```bash
-nm -gU build/vsql_duckdb_veb_staging/lib/vsql_duckdb.so   # macOS
-nm -D --defined-only build/vsql_duckdb_veb_staging/lib/vsql_duckdb.so | grep ' T '   # Linux
+so=$(find build -name vsql_duckdb.so | head -1)
+nm -gU "$so"                                  # macOS
+nm -D --defined-only --extern-only "$so"      # Linux
 ```
 
-Both should list exactly `vef_register` and `vef_unregister`.
+Both should list exactly `vef_register` and `vef_unregister`. The library
+sits under `<build dir>/vsql_duckdb_veb_staging/lib/`, so the path follows
+whatever you named the build directory; continuous integration uses
+`ext-build` because the shared action does.
 
 ## Run the suite
 
@@ -65,7 +69,7 @@ down whatever happened, including a regression.
 |---|---|
 | `t/duckdb_basic.test` | The shape of every answer: a scalar, a JSON array, JSON types, escaping, an empty result, a NULL argument, a NULL value, a rejected query, and a rejected second statement |
 | `t/duckdb_parquet.test` | Writing a small Parquet file, counting it, a grouped rollup, unpacking that rollup into rows with `JSON_TABLE`, and a projection |
-| `t/duckdb_guards.test` | Every way a caller could reach past the engine: reading a local file, changing a locked setting, installing or loading a reader, printing the credential, exceeding the result limit, and exceeding the deadline |
+| `t/duckdb_guards.test` | Every way a caller could reach past the engine: reading a local file, changing a locked setting, installing or loading a reader, reaching a URL with external access off, a keyring secret that cannot be read, printing the credential, exceeding the result limit, and exceeding the deadline |
 
 Each test carries a `<name>-master.opt` that turns on
 `vsql_allow_preview_extensions`. A `suite.opt` would not be read, because MTR
@@ -99,7 +103,15 @@ that the reader itself is working.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` builds DuckDB, caches it against the DuckDB tag and
-reader list from `cmake/DuckDB.cmake`, hands the result to the shared
-`villagesql/extension-actions/cpp` action, and then checks the exported symbol
-count. The cache only misses when the tag or the reader list changes.
+`.github/workflows/ci.yml` builds DuckDB through `cmake/duckdb-standalone`,
+caches it against the DuckDB tag and reader list read out of
+`cmake/DuckDB.cmake`, hands the result to the shared
+`villagesql/extension-actions/cpp` action, and then checks that the shared
+object exports exactly two symbols. The cache only misses when the tag or the
+reader list changes.
+
+It builds through the standalone project rather than its own commands on
+purpose. A second copy of the DuckDB recipe is how `-DDISABLE_EXTENSION_LOAD=1`
+once came to be set in continuous integration and not in the build the README
+documents, which left the documented build able to load code at run time while
+the test suite stayed green against a correctly built DuckDB.
