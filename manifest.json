@@ -1,6 +1,6 @@
 {
   "name": "vsql_duckdb",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Run DuckDB queries over Parquet, CSV and JSON in object storage from SQL",
   "author": "VillageSQL Contributors",
   "license": "GPL-2.0"

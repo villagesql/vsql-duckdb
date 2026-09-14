@@ -125,13 +125,17 @@ void duckdb_scalar_impl(StringArg sql, StringResult out) try {
   report(out, "unknown failure");
 }
 
-// Appends `,"key":`, with the comma left off for the first field of an object.
+// Appends `,\n  "key": `, with the comma left off for the first field.
 void append_key(const char *key, std::string &out) {
-  if (out.size() > 1) out.push_back(',');
+  if (out.size() > 2) out.push_back(',');
+  out += "\n  ";
   append_json_string(key, out);
-  out.push_back(':');
+  out += ": ";
 }
 
+// A JSON object describing the engine and its settings, printed one field per
+// line so the mysql client shows it readably instead of in one wide column.
+// The whitespace is still valid JSON.
 void duckdb_status_impl(StringResult out) try {
   const Settings settings = vsql_duckdb::snapshot();
 
@@ -147,7 +151,7 @@ void duckdb_status_impl(StringResult out) try {
   append_key("readers", json);
   json.push_back('[');
   for (size_t i = 0; i < info.readers.size(); ++i) {
-    if (i > 0) json.push_back(',');
+    if (i > 0) json += ", ";
     append_json_string(info.readers[i], json);
   }
   json.push_back(']');
@@ -190,7 +194,7 @@ void duckdb_status_impl(StringResult out) try {
   append_key("max_result_bytes", json);
   json += std::to_string(settings.max_result_bytes);
 
-  json.push_back('}');
+  json += "\n}";
 
   // Bounded by the buffer alone, not by max_result_bytes. Status has to stay
   // readable when a caller has set that variable low, since finding out what

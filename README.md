@@ -1,13 +1,18 @@
 # VillageSQL DuckDB Extension
 
-Aggregate Parquet, CSV and JSON files held in object storage from an ordinary
-MySQL connection, without exporting the data first or running a second query
-engine beside the database.
+Aggregate Parquet, CSV and JSON files from an ordinary MySQL connection,
+without exporting the data first or running a second query engine beside the
+database. It reads the files wherever they live — an `s3://` bucket, an
+`https://` URL, or the server's own disk — so where they are stored does not
+change how you query them. Remote reads work as installed; local-file reads
+are off until you turn on `allow_local_files`.
 
 ```sql
 INSTALL EXTENSION vsql_duckdb;
 
-SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://sales/2026/*.parquet'')');
+-- A public Parquet file, over HTTPS, no credentials.
+SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')');
+-- 7433139
 ```
 
 The extension embeds DuckDB inside the VillageSQL server process. Your SQL text
@@ -122,9 +127,26 @@ SELECT duckdb_status();
 ```
 
 ```json
-{"duckdb_version":"v1.5.5","readers":["core_functions","httpfs","json","parquet"],
- "engine_error":"","object_storage_credential":"not configured", ...}
+{
+  "duckdb_version": "v1.5.5",
+  "readers": ["core_functions", "httpfs", "json", "parquet"],
+  "engine_error": "",
+  "object_storage_credential": "not configured",
+  "s3_endpoint": "",
+  "s3_region": "",
+  "s3_url_style": "vhost",
+  "s3_use_ssl": true,
+  "enable_external_access": true,
+  "allow_local_files": false,
+  "memory_limit_mb": 1024,
+  "threads": 2,
+  "timeout_ms": 30000,
+  "max_result_bytes": 1048576
+}
 ```
+
+At the `mysql` prompt the result prints on these separate lines. Batch mode
+(`mysql -e`) escapes the newlines to `\n`; use `\G` or `--raw` to read it there.
 
 ## Configuration
 
@@ -232,12 +254,13 @@ Runs one DuckDB statement and returns the whole result as a JSON array, one
 object per row, keys in column order.
 
 ```sql
-SELECT duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s3://b/s.parquet'')
-                     GROUP BY city ORDER BY city');
+SELECT duckdb_query('SELECT passenger_count, count(*) AS trips
+                     FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')
+                     GROUP BY passenger_count ORDER BY trips DESC LIMIT 3');
 ```
 
 ```json
-[{"city":"bergen","total":5},{"city":"oslo","total":30}]
+[{"passenger_count":1,"trips":5210818},{"passenger_count":2,"trips":1113704},{"passenger_count":3,"trips":317979}]
 ```
 
 Integers, decimals, floats and booleans keep their JSON types. Every other
@@ -248,10 +271,11 @@ string, because JSON cannot spell either.
 The result is `utf8mb4`, so MySQL's JSON functions read it with no cast:
 
 ```sql
-SELECT t.city, t.total
-FROM JSON_TABLE(duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s3://b/s.parquet'')
-                              GROUP BY city'),
-     '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t;
+SELECT t.passenger_count, t.trips
+FROM JSON_TABLE(duckdb_query('SELECT passenger_count, count(*) AS trips
+                              FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')
+                              GROUP BY passenger_count ORDER BY trips DESC LIMIT 3'),
+     '$[*]' COLUMNS (passenger_count INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
 
 - A NULL argument returns NULL, without reaching DuckDB.
@@ -269,7 +293,8 @@ Runs one DuckDB statement and returns the first column of the first row as
 text. This is the counts-and-sums path, with no JSON to unwrap.
 
 ```sql
-SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://sales/*.parquet'')');
+SELECT duckdb_scalar('SELECT round(sum(fare_amount)) FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')');
+-- 98075288.0
 ```
 
 - A NULL argument returns NULL.
@@ -279,9 +304,9 @@ SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://sales/*.parquet''
 
 ### `duckdb_status() -> VARCHAR`
 
-Returns a JSON object describing the engine and its settings. It answers two
-questions `SHOW VARIABLES` cannot: which readers this bundle was built with,
-and whether the object storage credential loaded.
+Returns a JSON object describing the engine and its settings, printed one field
+per line. It answers two questions `SHOW VARIABLES` cannot: which readers this
+bundle was built with, and whether the object storage credential loaded.
 
 | Key | Meaning |
 |---|---|
@@ -290,7 +315,8 @@ and whether the object storage credential loaded.
 | `engine_error` | Empty when DuckDB started and locked itself cleanly |
 | `object_storage_credential` | `not configured`, or the key id that loaded. Never the secret |
 
-The remaining keys echo the settings above. Never the secret access key.
+The remaining keys echo the `vsql_duckdb.*` settings, so you can confirm the
+whole engine posture in one call. Never the secret access key.
 
 ### Errors, not NULL
 
@@ -308,36 +334,43 @@ DuckDB cannot see your tables. Naming one fails in DuckDB's catalog rather
 than in MySQL:
 
 ```
-ERROR 3200 (HY000): VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Table with name "shop.regions" does not exist because schema "shop" does not exist.
+ERROR 3200 (HY000): VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Table with name "shop.party_size" does not exist because schema "shop" does not exist.
 ```
 
 The join belongs in the outer MySQL query. `JSON_TABLE` turns the JSON array
-into rows, and those rows join against a real table like any others:
+into rows, and those rows join against a real table like any others. This runs
+against the public taxi file and a small local lookup table:
 
 ```sql
-SELECT t.city, t.total, r.manager
+CREATE DATABASE shop;
+CREATE TABLE shop.party_size (passengers INT PRIMARY KEY, label VARCHAR(20));
+INSERT INTO shop.party_size VALUES (1,'solo'),(2,'couple'),(3,'small group');
+
+SELECT p.label, t.trips
 FROM JSON_TABLE(
-  duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''/path/to/sales.parquet'')
-                GROUP BY city'),
-  '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t
-JOIN shop.regions r ON r.city = t.city
-ORDER BY t.city;
+  duckdb_query('SELECT passenger_count, count(*) AS trips
+                FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')
+                GROUP BY passenger_count ORDER BY trips DESC LIMIT 3'),
+  '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t
+JOIN shop.party_size p ON p.passengers = t.passengers
+ORDER BY t.trips DESC;
 ```
 
 ```
-+--------+-------+---------+
-| city   | total | manager |
-+--------+-------+---------+
-| bergen |     5 | ben     |
-| oslo   |    30 | ana     |
-+--------+-------+---------+
++-------------+---------+
+| label       | trips   |
++-------------+---------+
+| solo        | 5210818 |
+| couple      | 1113704 |
+| small group |  317979 |
++-------------+---------+
 ```
 
 DuckDB aggregates the files and MySQL joins the result to your data. One JSON
 string crosses between them, so keep the DuckDB side to counts, sums and
 rollups rather than raw rows — see [Returning more than one
-megabyte](#returning-more-than-one-megabyte). An `s3://` path works the same
-way here as a local one.
+megabyte](#returning-more-than-one-megabyte). The file DuckDB reads can be an
+`https://` URL, an `s3://` path, or a local file; the outer join is the same.
 
 ## Returning more than one megabyte
 
@@ -402,10 +435,10 @@ consumed where it is produced.
 Unpack it into real columns instead of storing the array:
 
 ```sql
-CREATE TABLE totals AS
-SELECT t.city, t.total
-FROM JSON_TABLE(duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s3://b/*.parquet'') GROUP BY city'),
-     '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t;
+CREATE TABLE trips_by_size AS
+SELECT t.passengers, t.trips
+FROM JSON_TABLE(duckdb_query('SELECT passenger_count, count(*) AS trips FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'') GROUP BY passenger_count'),
+     '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
 
 Declaring `.max_result_length()` on the function would widen the column, and
@@ -496,24 +529,24 @@ Counting rows in a Parquet file:
 
 ```sql
 -- PostgreSQL
-SELECT count(*) FROM read_parquet('s3://sales/2026/*.parquet');
+SELECT count(*) FROM read_parquet('https://blobs.duckdb.org/data/taxi_2019_04.parquet');
 
 -- VillageSQL
-SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''s3://sales/2026/*.parquet'')');
+SELECT duckdb_scalar('SELECT count(*) FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')');
 ```
 
 A grouped rollup, as rows:
 
 ```sql
 -- PostgreSQL
-SELECT city, sum(n) FROM read_parquet('s3://sales/*.parquet') GROUP BY city;
+SELECT passenger_count, count(*) FROM read_parquet('https://blobs.duckdb.org/data/taxi_2019_04.parquet') GROUP BY passenger_count;
 
 -- VillageSQL
-SELECT t.city, t.total
+SELECT t.passengers, t.trips
 FROM JSON_TABLE(
-  duckdb_query('SELECT city, sum(n) AS total FROM read_parquet(''s3://sales/*.parquet'')
-                GROUP BY city'),
-  '$[*]' COLUMNS (city VARCHAR(64) PATH '$.city', total BIGINT PATH '$.total')) AS t;
+  duckdb_query('SELECT passenger_count, count(*) AS trips FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'')
+                GROUP BY passenger_count'),
+  '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
 
 Note the doubled single quotes: the DuckDB query is a MySQL string literal, so
