@@ -45,6 +45,21 @@ FROM JSON_TABLE(duckdb_query(@rollup), '$[*]'
 ORDER BY t.city;
 
 --echo #
+--echo # Those unpacked rows join to a real MySQL table like any others
+--echo #
+
+CREATE TABLE regions (city VARCHAR(32) PRIMARY KEY, region VARCHAR(32));
+INSERT INTO regions VALUES ('oslo','east'),('bergen','west');
+
+SELECT r.region, t.city, t.total
+FROM JSON_TABLE(duckdb_query(@rollup), '$[*]'
+     COLUMNS (city VARCHAR(32) PATH '$.city', total INT PATH '$.total')) AS t
+JOIN regions r ON r.city = t.city
+ORDER BY t.city;
+
+DROP TABLE regions;
+
+--echo #
 --echo # Only the columns a query names are read, so a projection works the same
 --echo #
 
