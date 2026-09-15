@@ -113,6 +113,37 @@ SELECT duckdb_scalar('SELECT 1') AS still_working;
 still_working
 1
 #
+# The column that stores a result is sized from the argument, not from
+# the result. A literal of n characters gives varchar(4n), which MySQL
+# promotes to text once 4n passes 512, so padding the same query with a
+# comment changes whether the result stores. Any non-literal argument
+# gives longtext. This guards the sizes, not the refusal: a narrow
+# column still errors rather than truncating.
+#
+CREATE TABLE kept AS
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i)') AS j;
+ERROR 22001: Data too long for column 'j' at row 1
+CREATE TABLE kept AS
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i) /*--------------------------------------------------------------------------------*/') AS j;
+SELECT COLUMN_TYPE AS padded_literal FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'test' AND TABLE_NAME = 'kept' AND COLUMN_NAME = 'j';
+padded_literal
+text
+SELECT JSON_VALID(j) AS valid FROM kept;
+valid
+1
+DROP TABLE kept;
+SET @q = 'SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i)';
+CREATE TABLE kept AS SELECT duckdb_query(@q) AS j;
+SELECT COLUMN_TYPE AS user_variable FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'test' AND TABLE_NAME = 'kept' AND COLUMN_NAME = 'j';
+user_variable
+longtext
+SELECT JSON_VALID(j) AS valid FROM kept;
+valid
+1
+DROP TABLE kept;
+#
 # Cleanup
 #
 UNINSTALL EXTENSION vsql_duckdb;

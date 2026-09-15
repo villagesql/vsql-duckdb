@@ -121,6 +121,33 @@ SET GLOBAL vsql_duckdb.timeout_ms = DEFAULT;
 SELECT duckdb_scalar('SELECT 1') AS still_working;
 
 --echo #
+--echo # The column that stores a result is sized from the argument, not from
+--echo # the result. A literal of n characters gives varchar(4n), which MySQL
+--echo # promotes to text once 4n passes 512, so padding the same query with a
+--echo # comment changes whether the result stores. Any non-literal argument
+--echo # gives longtext. This guards the sizes, not the refusal: a narrow
+--echo # column still errors rather than truncating.
+--echo #
+
+--error ER_DATA_TOO_LONG
+CREATE TABLE kept AS
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i)') AS j;
+
+CREATE TABLE kept AS
+SELECT duckdb_query('SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i) /*--------------------------------------------------------------------------------*/') AS j;
+SELECT COLUMN_TYPE AS padded_literal FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'test' AND TABLE_NAME = 'kept' AND COLUMN_NAME = 'j';
+SELECT JSON_VALID(j) AS valid FROM kept;
+DROP TABLE kept;
+
+SET @q = 'SELECT i, repeat(''x'',50) AS pad FROM range(20) t(i)';
+CREATE TABLE kept AS SELECT duckdb_query(@q) AS j;
+SELECT COLUMN_TYPE AS user_variable FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'test' AND TABLE_NAME = 'kept' AND COLUMN_NAME = 'j';
+SELECT JSON_VALID(j) AS valid FROM kept;
+DROP TABLE kept;
+
+--echo #
 --echo # Cleanup
 --echo #
 

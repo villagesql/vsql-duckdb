@@ -418,19 +418,35 @@ that shape does not approach the limit.
 
 ### Storing a result in a table
 
-`CREATE TABLE ... AS SELECT duckdb_query(...)` fails for all but the smallest
-results, on either ABI:
+`CREATE TABLE ... AS SELECT duckdb_query(...)` may fail, and whether it does
+turns on how the argument was written rather than on how large the result is.
+
+The column is sized from the argument, not from the result. A string literal of
+`n` characters gives `varchar(4n)` on a `utf8mb4` connection, which MySQL
+promotes to `text` once `4n` passes 512. A short literal is therefore the
+narrow case, and a result wider than the query that made it is refused:
 
 ```
-ERROR 1406 (22001): Data too long for column 'v' at row 1
+mysql> CREATE TABLE t AS
+    -> SELECT duckdb_query('SELECT range AS n, repeat(''x'', 50) AS pad FROM range(20)') AS j;
+ERROR 1406 (22001): Data too long for column 'j' at row 1
 ```
 
-The column is sized from the width of the SQL text you passed in, not from the
-result. Measured on a `utf8mb4` connection: a query whose text was 112
-characters produced `varchar(448)`, four bytes per character, so only a result
-several times shorter than the query that made it will store. It is an honest
-error rather than a silent truncation, but it means the result has to be
-consumed where it is produced.
+Measured: a 114-character literal produced `varchar(456)`, and a 200-character
+one produced `text`, which holds 64 KiB and took that same 1351-byte result
+without complaint.
+
+Any argument that is not a literal — a user variable, a `CONCAT`, a column —
+gives `longtext`, and the result stores up to whatever `max_result_bytes`
+allows:
+
+```sql
+SET @q = 'SELECT city, sum(n) AS total FROM read_parquet(''s3://b/*.parquet'') GROUP BY city';
+CREATE TABLE totals_json AS SELECT duckdb_query(@q) AS j;   -- j is longtext
+```
+
+When it does fail, it fails with an honest error rather than a silent
+truncation.
 
 Unpack it into real columns instead of storing the array:
 
@@ -441,8 +457,8 @@ FROM JSON_TABLE(duckdb_query('SELECT passenger_count, count(*) AS trips FROM rea
      '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
 
-Declaring `.max_result_length()` on the function would widen the column, and
-carries the same development-ABI decision as above.
+Declaring `.max_result_length()` on the function would widen the literal case,
+and carries the same development-ABI decision as above.
 
 ## Adding more readers
 
@@ -584,7 +600,7 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 |---|---|---|
 | A function returns one value, not rows | `duckdb_query` returns a JSON array and `JSON_TABLE` unpacks it | [#549](https://github.com/villagesql/villagesql-server/issues/549) |
 | The result is capped, and the cap is refused rather than cut | One megabyte by default. The stable extension SDK cannot report an overflow to the server, so a longer value would come back truncated — and truncated JSON loses its closing bracket and stops parsing. The extension raises an error instead | [#1135](https://github.com/villagesql/villagesql-server/issues/1135), and see [Returning more than one megabyte](#returning-more-than-one-megabyte) |
-| A result cannot be stored in a column | `CREATE TABLE ... AS SELECT duckdb_query(...)` gives `ERROR 1406`, because the column is sized from the width of the SQL text, not the result. Unpack with `JSON_TABLE` instead | `.max_result_length()`, which needs the development ABI |
+| Storing a result in a column depends on how the argument was written | The column is sized from the argument, not the result. A short string literal gives a narrow `varchar` and a wider result raises `ERROR 1406`; a long literal gives `text`, and a user variable or any other non-literal gives `longtext`, which stores. Unpacking with `JSON_TABLE` avoids the question | `.max_result_length()`, which needs the development ABI |
 | Settings are read through the server, not from their own storage | Reading the storage a system variable points at is unsafe on a query thread, and there is no hook that runs once the variables exist | [#1136](https://github.com/villagesql/villagesql-server/issues/1136) |
 | Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. Join its output in the outer query instead — see [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables). The `mysql_scanner` reader would close the gap, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
 | Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | [#261](https://github.com/villagesql/villagesql-server/issues/261) |

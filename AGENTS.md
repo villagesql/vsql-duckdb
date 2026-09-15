@@ -147,9 +147,10 @@ did not.
   `src/settings.h` is the only supported read; the raw `char *` globals are
   freed by the server on `SET`
   ([villagesql-server#1136](https://github.com/villagesql/villagesql-server/issues/1136)).
-- **`ESCAPED`, `ROWS` and `ROLLUP` are reserved words in MySQL.** Two of them
-  reached a test as column aliases and killed `mysqltest` with a syntax error
-  that read like a test-runner fault.
+- **`ESCAPED`, `ROWS`, `ROLLUP` and `STORED` are reserved words in MySQL.** Two
+  of them reached a test as column aliases and killed `mysqltest` with a syntax
+  error that read like a test-runner fault. `STORED` did the same later as a
+  table name in `duckdb_guards.test`.
 - **`UNINSTALL EXTENSION` then `INSTALL EXTENSION` resets every
   `vsql_duckdb.*` variable** to its compiled default inside the running server,
   including values set with `SET PERSIST`.
