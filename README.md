@@ -7,6 +7,9 @@ database. It reads the files wherever they live — an `s3://` bucket, an
 change how you query them. Remote reads work as installed; local-file reads
 are off until you turn on `allow_local_files`.
 
+**Docs:** [VillageSQL documentation](https://villagesql.com/docs) ·
+[Install VillageSQL Server](https://villagesql.com/install)
+
 ```sql
 INSTALL EXTENSION vsql_duckdb;
 
