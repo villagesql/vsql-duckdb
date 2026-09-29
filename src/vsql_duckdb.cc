@@ -50,6 +50,7 @@ constexpr size_t kStatusBufferSize = 16384;
 // legitimate answer here -- max() over an empty file is NULL -- so a caller
 // could not tell a missing bucket from an empty one.
 void report(StringResult out, const std::string &message) {
+  vsql_duckdb::note_query_failed();
   out.error("vsql_duckdb: " + message);
 }
 
@@ -84,6 +85,7 @@ void duckdb_query_impl(StringArg sql, StringResult out) try {
                     ". Narrow the query or add a LIMIT");
     return;
   }
+  vsql_duckdb::note_query_ok();
   out.set(json);
 } catch (const std::exception &e) {
   report(out, e.what());
@@ -103,11 +105,13 @@ void duckdb_scalar_impl(StringArg sql, StringResult out) try {
     return;
   }
   if (outcome.result->RowCount() == 0 || outcome.result->names.empty()) {
+    vsql_duckdb::note_query_ok();
     out.set_null();
     return;
   }
   duckdb::Value value = outcome.result->GetValue(0, 0);
   if (value.IsNull()) {
+    vsql_duckdb::note_query_ok();
     out.set_null();
     return;
   }
@@ -118,6 +122,7 @@ void duckdb_scalar_impl(StringArg sql, StringResult out) try {
                     std::to_string(cap.bytes) + " byte limit set by " + cap.reason);
     return;
   }
+  vsql_duckdb::note_query_ok();
   out.set(text);
 } catch (const std::exception &e) {
   report(out, e.what());
@@ -217,6 +222,7 @@ VEF_GENERATE_ENTRY_POINTS(
     make_extension()
         .with(vsql_duckdb::g_sys_vars)
         .with(vsql_duckdb::g_keyring)
+        .with(vsql_duckdb::g_status_vars)
         .func(make_func<&duckdb_query_impl>("duckdb_query")
                   .returns(STRING)
                   .param(STRING)

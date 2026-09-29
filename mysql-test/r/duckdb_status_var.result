@@ -1,0 +1,28 @@
+INSTALL EXTENSION vsql_duckdb;
+#
+# vsql_duckdb.queries_total / vsql_duckdb.queries_failed are process-wide
+# counters (one DuckDB engine shared across connections), so this reads
+# a baseline first and asserts on the delta rather than an absolute
+# value -- other duckdb_* test files that run in the same server
+# session bump the same globals.
+#
+SELECT duckdb_scalar('SELECT 1 + 1') AS ok_1;
+ok_1
+2
+SELECT duckdb_query('SELECT i AS n FROM range(3) t(i) ORDER BY i') AS ok_2;
+ok_2
+[{"n":0},{"n":1},{"n":2}]
+SELECT duckdb_scalar('SELECT NULL WHERE 1 = 0') AS null_is_not_a_failure;
+null_is_not_a_failure
+NULL
+SELECT duckdb_scalar('SELECT * FROM does_not_exist_xyz');
+ERROR HY000: VDF error in function 'duckdb_scalar': vsql_duckdb: Catalog Error: Table with name does_not_exist_xyz does not exist!
+Did you mean "pg_settings"?
+
+LINE 1: SELECT * FROM does_not_exist_xyz
+                      ^
+total_delta
+4
+failed_delta
+1
+UNINSTALL EXTENSION vsql_duckdb;
