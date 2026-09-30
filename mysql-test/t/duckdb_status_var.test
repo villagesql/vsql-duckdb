@@ -1,0 +1,32 @@
+INSTALL EXTENSION vsql_duckdb;
+
+--echo #
+--echo # vsql_duckdb.queries_total / vsql_duckdb.queries_failed are process-wide
+--echo # counters (one DuckDB engine shared across connections), so this reads
+--echo # a baseline first and asserts on the delta rather than an absolute
+--echo # value -- other duckdb_* test files that run in the same server
+--echo # session bump the same globals.
+--echo #
+
+--let $before_total = query_get_value(SHOW STATUS LIKE 'vsql_duckdb.queries_total', Value, 1)
+--let $before_failed = query_get_value(SHOW STATUS LIKE 'vsql_duckdb.queries_failed', Value, 1)
+
+# Two successful queries, one of them returning NULL (still a successful
+# query -- NULL is a legitimate answer, not a failure).
+SELECT duckdb_scalar('SELECT 1 + 1') AS ok_1;
+SELECT duckdb_query('SELECT i AS n FROM range(3) t(i) ORDER BY i') AS ok_2;
+SELECT duckdb_scalar('SELECT NULL WHERE 1 = 0') AS null_is_not_a_failure;
+
+# One failing query (references a table that does not exist).
+--error ER_UDF_ERROR
+SELECT duckdb_scalar('SELECT * FROM does_not_exist_xyz');
+
+--let $after_total = query_get_value(SHOW STATUS LIKE 'vsql_duckdb.queries_total', Value, 1)
+--let $after_failed = query_get_value(SHOW STATUS LIKE 'vsql_duckdb.queries_failed', Value, 1)
+
+--disable_query_log
+--eval SELECT $after_total - $before_total AS total_delta
+--eval SELECT $after_failed - $before_failed AS failed_delta
+--enable_query_log
+
+UNINSTALL EXTENSION vsql_duckdb;

@@ -18,6 +18,7 @@
 #define VSQL_DUCKDB_SETTINGS_H
 
 #include <villagesql/preview/keyring.h>
+#include <villagesql/preview/status_var.h>
 #include <villagesql/preview/sys_var.h>
 
 #include <mutex>
@@ -199,6 +200,32 @@ inline auto g_sys_vars = sv::make_capability({
 });
 
 inline vsql::preview_keyring::KeyringCapability g_keyring;
+
+// Query/error counters, exposed via SHOW STATUS. Engine::get() is a single
+// process-wide instance shared across connections, so these are incremented
+// with the __atomic builtins rather than plain ++ -- the status_var
+// descriptor takes a plain `long long*` (see status_var.h), not an
+// std::atomic<long long>*, so the builtin operates directly on the same
+// storage the descriptor points at instead of requiring an incompatible
+// pointer type.
+inline long long g_queries_total = 0;
+inline long long g_queries_failed = 0;
+
+inline void note_query_ok() {
+  __atomic_fetch_add(&g_queries_total, 1, __ATOMIC_RELAXED);
+}
+
+inline void note_query_failed() {
+  __atomic_fetch_add(&g_queries_total, 1, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&g_queries_failed, 1, __ATOMIC_RELAXED);
+}
+
+namespace svar = vsql::preview_status_var;
+
+inline auto g_status_vars = svar::make_capability({
+    svar::make_int("queries_total", &g_queries_total),
+    svar::make_int("queries_failed", &g_queries_failed),
+});
 
 // See the declaration above snapshot() for why this asks the server instead
 // of reading the globals.
