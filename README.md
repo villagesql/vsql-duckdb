@@ -346,7 +346,7 @@ FROM JSON_TABLE(
     SELECT hour(tpep_pickup_datetime)            AS pickup_hour,
            count(*)                              AS trips,
            round(avg(trip_distance), 2)          AS avg_miles,
-           round(avg(total_amount), 2)           AS avg_fare,
+           round(avg(total_amount), 2)           AS avg_total,
            round(100.0 * avg(tip_amount / nullif(fare_amount, 0))
                  FILTER (WHERE payment_type = 1), 1) AS card_tip_pct
     FROM 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet'
@@ -359,22 +359,22 @@ FROM JSON_TABLE(
     pickup_hour  INT           PATH '$.pickup_hour',
     trips        BIGINT        PATH '$.trips',
     avg_miles    DECIMAL(6,2)  PATH '$.avg_miles',
-    avg_fare     DECIMAL(8,2)  PATH '$.avg_fare',
+    avg_total    DECIMAL(8,2)  PATH '$.avg_total',
     card_tip_pct DECIMAL(5,1)  PATH '$.card_tip_pct'
   )
 ) AS t;
 ```
 
 ```
-+-------------+--------+-----------+----------+--------------+
-| pickup_hour | trips  | avg_miles | avg_fare | card_tip_pct |
-+-------------+--------+-----------+----------+--------------+
-|          18 | 210057 |      2.81 |    26.94 |         30.5 |
-|          17 | 203768 |      3.01 |    28.26 |         27.1 |
-|          16 | 187826 |      3.35 |    29.87 |         26.7 |
-|          15 | 186997 |      3.90 |    27.51 |         24.8 |
-|          19 | 181661 |      3.11 |    27.76 |         27.3 |
-+-------------+--------+-----------+----------+--------------+
++-------------+--------+-----------+-----------+--------------+
+| pickup_hour | trips  | avg_miles | avg_total | card_tip_pct |
++-------------+--------+-----------+-----------+--------------+
+|          18 | 210057 |      2.81 |     26.94 |         30.5 |
+|          17 | 203768 |      3.01 |     28.26 |         27.1 |
+|          16 | 187826 |      3.35 |     29.87 |         26.7 |
+|          15 | 186997 |      3.90 |     27.51 |         24.8 |
+|          19 | 181661 |      3.11 |     27.76 |         27.3 |
++-------------+--------+-----------+-----------+--------------+
 ```
 
 - The text inside `duckdb_query` is DuckDB SQL, passed through unchanged. That
