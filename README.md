@@ -34,6 +34,7 @@ VillageSQL Extension Framework supports today. See
 - [Installing](#installing)
 - [Configuration](#configuration)
 - [Function Reference](#function-reference)
+- [Example: aggregating a remote Parquet file](#example-aggregating-a-remote-parquet-file)
 - [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables)
 - [Returning more than one megabyte](#returning-more-than-one-megabyte)
 - [Adding more readers](#adding-more-readers)
@@ -330,6 +331,62 @@ caller who got NULL could not tell an empty bucket from a missing one.
 
 The DuckDB message comes through in the error, so a wrong path, a denied
 bucket or a bad function name each say so.
+
+## Example: aggregating a remote Parquet file
+
+The busiest pickup hours for New York yellow cabs in January 2024, read
+straight from the city's public Parquet file of about three million trips.
+DuckDB fetches the file over HTTPS and does the aggregation; only five rows
+come back to MySQL, and `JSON_TABLE` turns them into typed columns.
+
+```sql
+SELECT t.*
+FROM JSON_TABLE(
+  duckdb_query("
+    SELECT hour(tpep_pickup_datetime)            AS pickup_hour,
+           count(*)                              AS trips,
+           round(avg(trip_distance), 2)          AS avg_miles,
+           round(avg(total_amount), 2)           AS avg_total,
+           round(100.0 * avg(tip_amount / nullif(fare_amount, 0))
+                 FILTER (WHERE payment_type = 1), 1) AS card_tip_pct
+    FROM 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet'
+    WHERE fare_amount > 0
+    GROUP BY pickup_hour
+    ORDER BY trips DESC
+    LIMIT 5
+  "),
+  '$[*]' COLUMNS (
+    pickup_hour  INT           PATH '$.pickup_hour',
+    trips        BIGINT        PATH '$.trips',
+    avg_miles    DECIMAL(6,2)  PATH '$.avg_miles',
+    avg_total    DECIMAL(8,2)  PATH '$.avg_total',
+    card_tip_pct DECIMAL(5,1)  PATH '$.card_tip_pct'
+  )
+) AS t;
+```
+
+```
++-------------+--------+-----------+-----------+--------------+
+| pickup_hour | trips  | avg_miles | avg_total | card_tip_pct |
++-------------+--------+-----------+-----------+--------------+
+|          18 | 210057 |      2.81 |     26.94 |         30.5 |
+|          17 | 203768 |      3.01 |     28.26 |         27.1 |
+|          16 | 187826 |      3.35 |     29.87 |         26.7 |
+|          15 | 186997 |      3.90 |     27.51 |         24.8 |
+|          19 | 181661 |      3.11 |     27.76 |         27.3 |
++-------------+--------+-----------+-----------+--------------+
+```
+
+- The text inside `duckdb_query` is DuckDB SQL, passed through unchanged. That
+  is why it can name a URL as a table and use `hour()` and `FILTER (WHERE ...)`.
+  `payment_type = 1` is a card payment, the only kind with recorded tips.
+- Wrapping the DuckDB SQL in double quotes lets the URL keep its single quotes
+  without doubling them. That relies on `ANSI_QUOTES` being off, which is
+  MySQL's default. With it on, use single quotes outside and write the URL as
+  `''https://...''`, as the other examples here do.
+- Keep the aggregation in DuckDB. A result larger than
+  `vsql_duckdb.max_result_bytes` raises an error rather than coming back cut
+  short.
 
 ## Joining a dataset to your own tables
 
