@@ -135,14 +135,20 @@ did not.
 
 ## Things that will catch you out
 
-- **A STRING result is cut at the buffer, silently.** The stable SDK's
-  `StringResult::set()` reports only what fitted, so the server never learns
-  the value overflowed and its grow-and-retry never fires
+- **An oversized STRING result makes the server call the function again.**
+  On protocol 5 `StringResult::set()` reports the full length, and the server
+  grows the buffer and re-invokes the function. For `duckdb_query` that runs
+  the DuckDB query twice. Every entry point therefore compares its output
+  against `out.buffer().size()` and raises an error instead. Do not remove
+  those checks. On protocol 3 they were what stopped a silent truncation
   ([villagesql-server#1135](https://github.com/villagesql/villagesql-server/issues/1135)).
-  The grow-and-retry comment in the SDK lives in the `include-dev` tree, which
-  this extension does not compile against. Every entry point therefore compares
-  its output against `out.buffer().size()` and raises an error. Do not remove
-  those checks.
+- **The SDK and the server must both be 0.0.8 or newer.** Building against
+  the 0.0.8 SDK declares protocol 5, and `duckdb_basic.test` asserts that
+  protocol 5 was negotiated. The `sys_var` capability changed version in
+  0.0.8, so neither mix installs: a 0.0.7 server refuses this build, and a
+  0.0.8 server refuses one built against the 0.0.7 SDK. Both fail at
+  `INSTALL EXTENSION` with `no matching ABI version for capability
+  'vsql::sys_var'`.
 - **Do not read a system variable's storage directly.** `snapshot()` in
   `src/settings.h` is the only supported read; the raw `char *` globals are
   freed by the server on `SET`

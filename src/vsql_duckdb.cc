@@ -36,12 +36,12 @@ using vsql_duckdb::Engine;
 using vsql_duckdb::Settings;
 using vsql_duckdb::append_json_string;
 
-// The result buffer the server hands the function. On protocol 3 this is also
-// a hard ceiling: a longer string is cut to exactly this many bytes, with no
-// warning and no second call, so every function below refuses to return more
-// than its buffer holds. Raising these needs .max_result_length(), which
-// requires the development ABI -- see "Returning more than one megabyte" in
-// the README.
+// The result buffer the server hands the function. Every function below
+// refuses to return more than its buffer holds. On protocol 5 the server
+// would grow the buffer for an oversized result, but by calling the function
+// again, and for duckdb_query that runs the DuckDB query a second time. To
+// allow larger results, raise these -- see "Returning more than one megabyte"
+// in the README.
 constexpr size_t kQueryBufferSize = 1048576;
 constexpr size_t kScalarBufferSize = 65536;
 constexpr size_t kStatusBufferSize = 16384;

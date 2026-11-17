@@ -8,7 +8,7 @@ the tests can run in any order and leave nothing behind.
 
 | Requirement | Why |
 |---|---|
-| A VillageSQL build or dev server, 0.0.6 or newer | Supplies `mysql-test-run.pl` and the SDK |
+| A VillageSQL build or dev server, 0.0.8 or newer | Supplies `mysql-test-run.pl` and the SDK. The extension declares protocol 5, which 0.0.8 introduced |
 | `VillageSQL_BUILD_DIR` pointing at it | Read by `build.sh` and by CMake |
 | The extension built and its `.veb` in the server's `veb_dir` | `cmake --install` puts it there |
 | A machine that can build DuckDB, or a DuckDB tree you built earlier | See the README |

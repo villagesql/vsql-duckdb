@@ -59,7 +59,7 @@ first time and is then reused. Nothing is downloaded at run time.
 
 | | |
 |---|---|
-| A VillageSQL build or dev server newer than 0.0.6 | On 0.0.6 a `STRING` result carries the binary character set, and MySQL's JSON functions reject it |
+| A VillageSQL build or dev server, 0.0.8 or newer | The extension is built for extension protocol 5, which 0.0.8 introduced. A 0.0.7 server refuses to install it |
 | A C++17 compiler and CMake 3.18 or newer | |
 | OpenSSL and libcurl development headers | DuckDB's HTTP reader uses both |
 | Git | DuckDB is fetched from its own repository at a pinned tag |
@@ -442,31 +442,20 @@ reached 1048576 bytes at row 8748, the limit set by vsql_duckdb.max_result_bytes
 Narrow the query or add a LIMIT
 ```
 
-Raising `vsql_duckdb.max_result_bytes` alone does not lift it. The extension is
-built against the stable extension SDK, whose result writer copies what fits
-and reports only that much, so the server is never told the value overflowed
-and cannot grow the buffer. A result past the buffer would come back cut, with
-no warning. The extension refuses instead, because a cut JSON array loses its
-closing bracket and no longer parses.
+Raising `vsql_duckdb.max_result_bytes` alone does not lift it. The ceiling is
+the result buffer each function declares, `kQueryBufferSize` in
+`src/vsql_duckdb.cc`; `effective_cap()` clamps to it whatever
+`max_result_bytes` says.
 
-The development SDK's writer reports the full size, and the server then grows
-the buffer and calls the function again. Measured on
-`mysql-8.4_0.0.7-dev`, same server, one probe extension built each way against
-a 1 KiB buffer: the development build returned 5000 bytes after two calls with
-the buffer grown to 5120, and the stable build returned 1024 bytes after one
-call. A 20 MB result came back whole on the development build.
+On protocol 5 the server can grow a result buffer that turns out too small, but
+it does so by calling the function again. For `duckdb_query` that would run the
+DuckDB query a second time, reading the same remote files twice. The extension
+refuses a result that does not fit its buffer instead, so a query never runs
+more than once.
 
-So the way to lift the ceiling is to build against the development ABI. That
-is a real decision, not a flag: the development ABI is shipped and tested, but
-it is not the stable surface, and an extension built against it needs a server
-that matches.
-
-To take that route, point the include path at the SDK's `include-dev` tree
-ahead of `include`, and raise `kQueryBufferSize` in `src/vsql_duckdb.cc` or
-declare `.max_result_length()`. That constant is the real ceiling —
-`effective_cap()` clamps to it whatever `max_result_bytes` says — and
-`src/settings.h` already admits up to 16 MB, so it needs no edit below that.
-Then confirm on your target server that a large result comes back whole:
+To lift the ceiling, raise `kQueryBufferSize`. `src/settings.h` already admits
+up to 16 MB, so it needs no edit below that. Then confirm on your target server
+that a large result comes back whole:
 
 ```sql
 SELECT JSON_VALID(duckdb_query('SELECT i, repeat(''x'',100) AS pad FROM range(20000) t(i)'));
@@ -501,8 +490,8 @@ FROM JSON_TABLE(duckdb_query('SELECT passenger_count, count(*) AS trips FROM rea
      '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
 
-Declaring `.max_result_length()` on the function would widen the column, and
-carries the same development-ABI decision as above.
+Declaring `.max_result_length()` on the function would widen the column. The
+stable SDK offers it from protocol 5; this extension does not declare it yet.
 
 ## Adding more readers
 
@@ -643,8 +632,8 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 | | What it means | What would remove it |
 |---|---|---|
 | A function returns one value, not rows | `duckdb_query` returns a JSON array and `JSON_TABLE` unpacks it | [#549](https://github.com/villagesql/villagesql-server/issues/549) |
-| The result is capped, and the cap is refused rather than cut | One megabyte by default. The stable extension SDK cannot report an overflow to the server, so a longer value would come back truncated — and truncated JSON loses its closing bracket and stops parsing. The extension raises an error instead | [#1135](https://github.com/villagesql/villagesql-server/issues/1135), and see [Returning more than one megabyte](#returning-more-than-one-megabyte) |
-| A result cannot be stored in a column | `CREATE TABLE ... AS SELECT duckdb_query(...)` gives `ERROR 1406`, because the column is sized from the width of the SQL text, not the result. Unpack with `JSON_TABLE` instead | `.max_result_length()`, which needs the development ABI |
+| The result is capped, and the cap is refused rather than cut | One megabyte by default. The server could grow the buffer, but only by calling the function again, which would run the DuckDB query twice. The extension raises an error instead | Raising `kQueryBufferSize` — see [Returning more than one megabyte](#returning-more-than-one-megabyte) |
+| A result cannot be stored in a column | `CREATE TABLE ... AS SELECT duckdb_query(...)` gives `ERROR 1406`, because the column is sized from the width of the SQL text, not the result. Unpack with `JSON_TABLE` instead | Declaring `.max_result_length()`, which the stable SDK offers from protocol 5 |
 | Settings are read through the server, not from their own storage | Reading the storage a system variable points at is unsafe on a query thread, and there is no hook that runs once the variables exist | [#1136](https://github.com/villagesql/villagesql-server/issues/1136) |
 | Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. Join its output in the outer query instead — see [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables). The `mysql_scanner` reader would close the gap, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
 | Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | [#261](https://github.com/villagesql/villagesql-server/issues/261) |

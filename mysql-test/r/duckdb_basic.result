@@ -1,5 +1,12 @@
 INSTALL EXTENSION vsql_duckdb;
 #
+# The extension runs on protocol 5, the newest the server offers.
+#
+SELECT NEGOTIATED_PROTOCOL FROM INFORMATION_SCHEMA.EXTENSION_REGISTRATION
+WHERE EXTENSION_NAME = 'vsql_duckdb';
+NEGOTIATED_PROTOCOL
+5
+#
 # The engine reports which readers it was built with, and no start-up
 # error. An empty error also means the engine passed its own check that
 # DuckDB was compiled with extension loading removed; a DuckDB built

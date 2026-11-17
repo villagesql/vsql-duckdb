@@ -61,8 +61,8 @@ jobs:
         with:
           extension-name: vsql_duckdb
           # No villagesql-version, so this takes the action default of nightly.
-          # Every test reads a result with a MySQL JSON function, and a STRING
-          # result is only utf8mb4 on a server newer than 0.0.6.
+          # The extension needs protocol 5, which arrived in 0.0.8, and
+          # duckdb_basic.test checks that protocol 5 was negotiated.
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # The extension must export nothing but its two entry points, or the
