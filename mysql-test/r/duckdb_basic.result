@@ -1,6 +1,6 @@
 INSTALL EXTENSION vsql_duckdb;
 #
-# The extension runs on protocol 5, the newest the server offers.
+# The extension is built for protocol 5, and the server agrees to it.
 #
 SELECT NEGOTIATED_PROTOCOL FROM INFORMATION_SCHEMA.EXTENSION_REGISTRATION
 WHERE EXTENSION_NAME = 'vsql_duckdb';

@@ -1,7 +1,7 @@
 INSTALL EXTENSION vsql_duckdb;
 
 --echo #
---echo # The extension runs on protocol 5, the newest the server offers.
+--echo # The extension is built for protocol 5, and the server agrees to it.
 --echo #
 
 SELECT NEGOTIATED_PROTOCOL FROM INFORMATION_SCHEMA.EXTENSION_REGISTRATION
