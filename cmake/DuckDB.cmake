@@ -29,7 +29,7 @@
 include(ExternalProject)
 include(FetchContent)
 
-set(DUCKDB_TAG "v1.5.5" CACHE STRING "DuckDB release tag to build against")
+set(DUCKDB_TAG "v1.5.6" CACHE STRING "DuckDB release tag to build against")
 set(DUCKDB_READERS "httpfs;json" CACHE STRING "DuckDB extensions to link in")
 set(DUCKDB_PREBUILT_ROOT "" CACHE PATH "Existing DuckDB install prefix to reuse")
 

@@ -108,7 +108,7 @@ the server where that is with `SHOW VARIABLES LIKE 'veb_dir'`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `DUCKDB_TAG` | `v1.5.5` | The DuckDB release to build against |
+| `DUCKDB_TAG` | `v1.5.6` | The DuckDB release to build against |
 | `DUCKDB_READERS` | `httpfs;json` | Which DuckDB readers to link in. `parquet` and `core_functions` are always present. Only the default pair works — see [Adding more readers](#adding-more-readers) |
 | `DUCKDB_PREBUILT_ROOT` | empty | Reuse a DuckDB tree built earlier, instead of building one. `DUCKDB_READERS` must name exactly that tree's readers |
 | `VCPKG_TOOLCHAIN_PATH` | empty | Needed only by readers that depend on vcpkg packages |
@@ -132,7 +132,7 @@ SELECT duckdb_status();
 
 ```json
 {
-  "duckdb_version": "v1.5.5",
+  "duckdb_version": "v1.5.6",
   "readers": ["core_functions", "httpfs", "json", "parquet"],
   "engine_error": "",
   "object_storage_credential": "not configured",
