@@ -521,21 +521,26 @@ that shape does not approach the limit.
 
 ### Storing a result in a table
 
-`CREATE TABLE ... AS SELECT duckdb_query(...)` fails for all but the smallest
-results, on either ABI:
+`CREATE TABLE ... AS SELECT duckdb_query(...)` sizes the column from
+`.max_result_length()`, which `duckdb_query` declares as `kQueryBufferSize` --
+the same number that bounds the result the function can return in the first
+place -- so the column is wide enough to hold whatever the function actually
+produces:
 
+```sql
+CREATE TABLE materialized AS
+SELECT duckdb_query('SELECT repeat(''x'', 5000) AS s') AS v;
 ```
-ERROR 1406 (22001): Data too long for column 'v' at row 1
-```
 
-The column is sized from the width of the SQL text you passed in, not from the
-result. Measured on a `utf8mb4` connection: a query whose text was 112
-characters produced `varchar(448)`, four bytes per character, so only a result
-several times shorter than the query that made it will store. It is an honest
-error rather than a silent truncation, but it means the result has to be
-consumed where it is produced.
+Measured with `kQueryBufferSize = 1048576`, `SHOW CREATE TABLE materialized`
+reports `v` as `longtext`. A result past that ceiling still does not store:
+`duckdb_query` itself raises the same "result reached ... the limit set by
+vsql_duckdb.max_result_bytes" error it would raise on its own (see
+[Returning more than one megabyte](#returning-more-than-one-megabyte)), rather
+than a silent or a mid-row truncation.
 
-Unpack it into real columns instead of storing the array:
+Unpacking into real columns is still worth doing when the shape fits, since a
+row-per-value table is more useful than one JSON blob:
 
 ```sql
 CREATE TABLE trips_by_size AS
@@ -543,9 +548,6 @@ SELECT t.passengers, t.trips
 FROM JSON_TABLE(duckdb_query('SELECT passenger_count, count(*) AS trips FROM read_parquet(''https://blobs.duckdb.org/data/taxi_2019_04.parquet'') GROUP BY passenger_count'),
      '$[*]' COLUMNS (passengers INT PATH '$.passenger_count', trips BIGINT PATH '$.trips')) AS t;
 ```
-
-Declaring `.max_result_length()` on the function would widen the column. The
-stable SDK offers it from protocol 5; this extension does not declare it yet.
 
 ## Adding more readers
 
@@ -677,7 +679,6 @@ SET PERSIST vsql_duckdb.s3_region = 'eu-north-1';
 |---|---|---|
 | A function returns one value, not rows | `duckdb_query` returns a JSON array and `JSON_TABLE` unpacks it | [#549](https://github.com/villagesql/villagesql-server/issues/549) |
 | The result is capped, and the cap is refused rather than cut | One megabyte by default. The server could grow the buffer, but only by calling the function again, which would run the DuckDB query twice. The extension raises an error instead | Raising `kQueryBufferSize` — see [Returning more than one megabyte](#returning-more-than-one-megabyte) |
-| A result cannot be stored in a column | `CREATE TABLE ... AS SELECT duckdb_query(...)` gives `ERROR 1406`, because the column is sized from the width of the SQL text, not the result. Unpack with `JSON_TABLE` instead | Declaring `.max_result_length()`, which the stable SDK offers from protocol 5 |
 | Settings are read through the server, not from their own storage | Reading the storage a system variable points at is unsafe on a query thread, and there is no hook that runs once the variables exist | [#1136](https://github.com/villagesql/villagesql-server/issues/1136) |
 | Your own tables are out of reach | A DuckDB query cannot read InnoDB tables. Join its output in the outer query instead — see [Joining a dataset to your own tables](#joining-a-dataset-to-your-own-tables). The `mysql_scanner` reader would close the gap, over a second connection at a different snapshot | [#597](https://github.com/villagesql/villagesql-server/issues/597), and [#286](https://github.com/villagesql/villagesql-server/issues/286) for consistency with InnoDB |
 | Ordinary SQL is not routed to DuckDB | The caller writes `duckdb_query('...')` explicitly | [#261](https://github.com/villagesql/villagesql-server/issues/261) |

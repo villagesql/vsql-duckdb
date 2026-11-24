@@ -1,0 +1,34 @@
+INSTALL EXTENSION vsql_duckdb;
+
+--echo #
+--echo # Without .max_result_length(), CREATE TABLE ... AS SELECT sizes the
+--echo # materialized column from the width of the SQL text passed to
+--echo # duckdb_query, not from the result it can actually produce. A short
+--echo # query that produces a long result used to fail with
+--echo # ER_DATA_TOO_LONG here; declaring .max_result_length(kQueryBufferSize)
+--echo # sizes the column to hold the full result instead.
+--echo #
+
+CREATE TABLE materialized_query AS
+SELECT duckdb_query('SELECT repeat(''x'', 5000) AS s') AS v;
+
+SHOW CREATE TABLE materialized_query;
+
+SELECT LENGTH(v) > 5000 AS result_not_truncated FROM materialized_query;
+
+DROP TABLE materialized_query;
+
+CREATE TABLE materialized_scalar AS
+SELECT duckdb_scalar('SELECT repeat(''x'', 5000)') AS v;
+
+SELECT LENGTH(v) AS scalar_length FROM materialized_scalar;
+
+DROP TABLE materialized_scalar;
+
+CREATE TABLE materialized_status AS SELECT duckdb_status() AS v;
+
+SELECT JSON_VALID(v) AS status_is_json FROM materialized_status;
+
+DROP TABLE materialized_status;
+
+UNINSTALL EXTENSION vsql_duckdb;

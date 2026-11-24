@@ -70,6 +70,7 @@ down whatever happened, including a regression.
 | `t/duckdb_basic.test` | The shape of every answer: a scalar, a JSON array, JSON types, escaping, an empty result, a NULL argument, a NULL value, a rejected query, and a rejected second statement |
 | `t/duckdb_parquet.test` | Writing a small Parquet file, counting it, a grouped rollup, unpacking that rollup into rows with `JSON_TABLE`, and a projection |
 | `t/duckdb_guards.test` | Every way a caller could reach past the engine: reading a local file, changing a locked setting, installing or loading a reader, reaching a URL with external access off, a keyring secret that cannot be read, printing the credential, exceeding the result limit, and exceeding the deadline |
+| `t/duckdb_materialize.test` | `CREATE TABLE ... AS SELECT` on `duckdb_query()`, `duckdb_scalar()` and `duckdb_status()`, each with a result longer than its argument width, proving the materialized column is sized from `.max_result_length()` and not truncated |
 
 Each test carries a `<name>-master.opt` that turns on
 `vsql_allow_preview_extensions`. A `suite.opt` would not be read, because MTR
