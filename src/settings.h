@@ -115,10 +115,20 @@ inline Settings read_globals() {
 // deadlock on that lock. Every variable carries this callback, so a variable
 // without one would silently freeze at the value it had when the cache was
 // first filled.
+//
+// read_globals() builds several std::strings, a genuine std::bad_alloc path,
+// and vef_sys_var_on_change_func_t returns void: there is no slot to report a
+// failure through, and an exception escaping from here would unwind through
+// the server's system-variable lock. The only safe response is to keep the
+// last-good cache; the SET that failed to apply is picked up whole by the
+// next change that succeeds.
 inline void note_change(vsql::preview_sys_var::SysVarChange) {
   std::lock_guard<std::mutex> lock(g_settings_mu);
-  g_settings_cache = read_globals();
-  g_settings_primed = true;
+  try {
+    g_settings_cache = read_globals();
+    g_settings_primed = true;
+  } catch (...) {
+  }
 }
 
 // Fills the cache for the first time, by asking the server for each value
